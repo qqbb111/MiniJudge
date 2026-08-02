@@ -1,4 +1,4 @@
 #pragma once
-#include<string>
+#include <string>
 
 bool compare(const std::string& actual, const std::string& expected);

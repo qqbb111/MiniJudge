@@ -1,31 +1,32 @@
-#include"Compiler.h"
-#include"Runner.h"
-#include"Checker.h"
-#include<bits/stdc++.h>
-using namespace std;
+#include <iostream>
+#include <string>
+
+#include "Compiler.h"
+#include "Runner.h"
+#include "Checker.h"
 
 int main(){
-    string code = "examples/accepted.cpp";
-    string exe = "tmp/user_program";
+    std::string code = "examples/accepted.cpp";
+    std::string exe = "tmp/user_program";
     int testcnt = 2;
 
     if(!compile(code, exe)){
-        cout << code << " CE\n";
+        std::cout << code << " CE\n";
         return 0;
     }
 
     for(int i = 1; i <= testcnt; i++){
-        string input = "tests/" + to_string(i) + ".in";
-        string output = "tmp/actual" + to_string(i) + ".out";
+        std::string input = "tests/" + std::to_string(i) + ".in";
+        std::string output = "tmp/actual" + std::to_string(i) + ".out";
         if(!run(exe, input, output)){
-            cout << "Run failed on test " << i << '\n';
+            std::cout << "Run failed on test " << i << '\n';
             continue;
         }
 
-        string expected = "tests/" + to_string(i) + ".out";
-        cout << "Test" << i << ": Run OK ";
-        if(compare(output, expected)) cout << "AC\n";
-        else cout << "WA\n";
+        std::string expected = "tests/" + std::to_string(i) + ".out";
+        std::cout << "Test" << i << ": Run OK ";
+        if(compare(output, expected)) std::cout << "AC\n";
+        else std::cout << "WA\n";
     }
 
     return 0;

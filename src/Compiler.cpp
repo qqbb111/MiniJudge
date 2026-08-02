@@ -1,6 +1,6 @@
 #include "Compiler.h"
-#include<string>
-#include<cstdlib>
+#include <string>
+#include <cstdlib>
 
 bool compile(const std::string& code, const std::string& exe){ // 编译
     std::string cmd = "g++ " + code + " -std=c++17 -O2 -o " + exe + " 2> tmp/compile.log";

@@ -1,6 +1,6 @@
-#include"Checker.h"
-#include<string>
-#include<cstdlib>
+#include "Checker.h"
+#include <string>
+#include <cstdlib>
 
 bool compare(const std::string& actual, const std::string& expected){
     std::string cmd = "diff -wB " + actual + " " + expected + " > /dev/null 2>&1";

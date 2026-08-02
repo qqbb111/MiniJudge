@@ -1,4 +1,4 @@
 #pragma once
-#include<string>
+#include <string>
 
 bool compile(const std::string& code, const std::string& exe);
