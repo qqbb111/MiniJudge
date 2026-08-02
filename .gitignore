@@ -1,2 +1,6 @@
+# runtime files
 tmp/*
 !tmp/.gitkeep
+
+# cmake build files
+build/
