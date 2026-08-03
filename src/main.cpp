@@ -1,32 +1,52 @@
 #include <iostream>
 #include <string>
+#include <filesystem>
+#include <vector>
 
 #include "Compiler.h"
 #include "Runner.h"
 #include "Checker.h"
+#include "TestCasesFinder.h"
 
-int main(){
-    std::string code = "examples/accepted.cpp";
+
+int main(int argc, char* argv[]){
+    if(argc < 2){
+        std::cerr << "Usage: " << argv[0] << " <source_path>\n";
+        return 1;
+    }
+
+    
+    std::string testDir = "tests";
+    std::string errMessage;
+    std::vector<std::string> testNames;
+    if(!findTestCases(testDir, testNames, errMessage)){
+        std::cerr << errMessage << '\n';
+        return 1;
+    }
+
+    std::string code = argv[1];
     std::string exe = "tmp/user_program";
-    int testcnt = 2;
-
     if(!compile(code, exe)){
         std::cout << code << " CE\n";
         return 0;
     }
 
-    for(int i = 1; i <= testcnt; i++){
-        std::string input = "tests/" + std::to_string(i) + ".in";
-        std::string output = "tmp/actual" + std::to_string(i) + ".out";
-        if(!run(exe, input, output)){
-            std::cout << "Run failed on test " << i << '\n';
+    for(const std::string& name : testNames){
+        std::filesystem::path input = std::filesystem::path(testDir) / (name + ".in");
+        std::filesystem::path expected = std::filesystem::path(testDir) / (name + ".out");
+        std::filesystem::path actualOutput = std::filesystem::path("tmp") / ("actual_" + name + ".out");
+        if(!run(exe, input.string(), actualOutput.string())){
+            std::cout << "Run failed on test " << name << '\n';
             continue;
         }
 
-        std::string expected = "tests/" + std::to_string(i) + ".out";
-        std::cout << "Test" << i << ": Run OK ";
-        if(compare(output, expected)) std::cout << "AC\n";
-        else std::cout << "WA\n";
+        std::cout << "Test " << name << ": ";
+        if(compare(actualOutput.string(), expected.string())){ 
+            std::cout << "AC\n";
+        }
+        else{
+            std::cout << "WA\n";
+        }
     }
 
     return 0;

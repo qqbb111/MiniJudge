@@ -9,6 +9,7 @@ add_executable(
     src/Compiler.cpp
     src/Runner.cpp
     src/Checker.cpp
+    src/TestCasesFinder.cpp
 )
 
 target_include_directories(
