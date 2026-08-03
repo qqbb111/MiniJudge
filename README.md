@@ -2,7 +2,7 @@
 
 MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测工具。
 
-支持编译待评测源码、自动发现测试点、批量运行程序、重定向输入输出并比较评测结果。
+支持编译待评测源码、自动发现测试点、批量运行程序、重定向输入输出、比较评测结果，并统计每个测试点的运行时间。
 
 ## 当前功能
 
@@ -13,8 +13,8 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * 批量运行多个测试点
 * 重定向程序标准输入和标准输出
 * 使用 `diff -wB` 比较实际输出与标准答案
+* 使用 `std::chrono::steady_clock` 统计每个测试点的运行时间
 * 输出以下基础结果：
-
   * `AC`：答案正确
   * `WA`：答案错误
   * `CE`：编译错误
@@ -35,14 +35,14 @@ MiniJudge/
 │   ├── Compiler.h
 │   ├── Runner.h
 │   ├── Checker.h
-│   └── TestCaseFinder.h
+│   └── TestCasesFinder.h
 │
 ├── src/
 │   ├── main.cpp
 │   ├── Compiler.cpp
 │   ├── Runner.cpp
 │   ├── Checker.cpp
-│   └── TestCaseFinder.cpp
+│   └── TestCasesFinder.cpp
 │
 ├── examples/
 ├── tests/
@@ -53,9 +53,9 @@ MiniJudge/
 模块职责：
 
 * `Compiler`：编译待评测源码
-* `Runner`：运行程序并重定向输入输出
+* `Runner`：运行程序、重定向输入输出并统计运行时间
 * `Checker`：比较实际输出与标准答案
-* `TestCaseFinder`：发现并校验测试数据
+* `TestCasesFinder`：发现并校验测试数据
 * `main.cpp`：组织完整评测流程
 
 `build/` 和 `tmp/` 中生成的临时文件不会提交到 Git 仓库。
@@ -151,7 +151,7 @@ A-Z  a-z  0-9  _  -  #  .
     ├── 编译失败 ──► CE
     │
     ▼
-运行测试点
+运行测试点并统计时间
     │
     ├── 运行失败 ──► Run failed
     │
@@ -167,15 +167,15 @@ A-Z  a-z  0-9  _  -  #  .
 ## 输出示例
 
 ```text
-Test 1: AC
-Test 2: WA
-Test 24#2: AC
+Test 1: AC (15.753 ms)
+Test 2: WA (21.656 ms)
+Test 24#2: AC (4.917 ms)
 ```
 
 运行失败时：
 
 ```text
-Run failed on test 2
+Test 2: Run failed (6.284 ms)
 ```
 
 编译失败时：
@@ -196,21 +196,22 @@ tmp/compile.log
 tmp/actual_<test_name>.out
 ```
 
+运行时间以微秒保存，输出时转换为毫秒并保留三位小数。
+
 ## 当前限制
 
 * 必须从项目根目录运行
 * 使用 `std::system()` 执行外部命令
 * 不支持包含空格或 Shell 特殊字符的路径
 * 无法精确区分不同类型的运行错误
-* 尚未实现超时检测
-* 尚未统计程序运行时间
+* 尚未实现超时检测和进程终止
+* 当前运行时间是 `std::system()` 调用的墙上时间，包含 Shell、进程启动和输入输出重定向开销
 * 尚未实现内存和其他资源限制
 * 测试点按照字符串字典序运行
 
 ## 后续计划
 
 * 使用 `fork()`、`exec()`、`dup2()` 和 `waitpid()` 管理评测进程
-* 统计每个测试点的运行时间
 * 实现超时检测和进程终止
 * 精确判断运行时错误
 * 增加内存和其他资源限制

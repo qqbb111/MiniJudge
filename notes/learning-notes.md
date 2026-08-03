@@ -1,727 +1,689 @@
 # MiniJudge 学习笔记
 
-------------------------------------------------------------------------
-
 # C++ 基础
 
 ## 1. `const T&` 传参
 
-结论：
+只读的 `std::string`、`std::vector` 等对象通常使用常量引用传参：
 
-只读的 `string`、`vector` 等对象通常使用：
-
-``` cpp
-bool run(const string& path);
+```cpp
+bool run(const std::string& path);
 ```
 
-原因：
-
--   避免复制，提高效率
--   防止函数修改原对象
-
-区别：
-
-``` cpp
-T        // 复制一份
-T&       // 引用，可以修改
-const T& // 引用，不可修改
+```text
+T        复制对象
+T&       引用对象，可以修改
+const T& 引用对象，不可修改
 ```
 
-------------------------------------------------------------------------
+作用：避免复制，并防止函数修改原对象。
+
+常见坑：小型基础类型如 `int` 通常直接按值传递，不必使用引用。
+
+---
 
 ## 2. `std::string::c_str()`
 
-作用：
+`c_str()` 将 `std::string` 转换为 C 接口需要的 `const char*`：
 
-把 `std::string` 转成 C 接口需要的 `const char*`。
-
-例如：
-
-``` cpp
-string cmd = "ls";
-system(cmd.c_str());
+```cpp
+std::string cmd = "ls";
+std::system(cmd.c_str());
 ```
 
-常见场景：
+常见场景：`std::system()` 等传统 C 接口不能直接接收 `std::string`。
 
-``` cpp
-system()
+---
+
+## 3. 结构体保存一组结果
+
+当函数需要返回多个相关数据时，可以定义结构体：
+
+```cpp
+struct RunResult {
+    bool success;
+    long long elapsedMicroseconds;
+};
 ```
 
-需要：
+返回时可以使用聚合初始化：
 
-``` cpp
-const char*
+```cpp
+return {res == 0, elapsedUs};
 ```
 
-而不是：
+当前含义：
 
-``` cpp
-string
+```text
+success             运行命令是否成功
+elapsedMicroseconds 本次运行的墙上时间，单位为微秒
 ```
 
-------------------------------------------------------------------------
+常见坑：结构体应在确实需要保存或传递一组相关数据时再引入，不要为了使用新语法过早抽象。
+
+---
+
+## 4. 项目命名规则
+
+当前 MiniJudge 统一使用：
+
+```text
+类型名       PascalCase       RunResult、TestCase
+函数和变量   lowerCamelCase   findTestCases、sourcePath
+模块文件名   PascalCase       Runner.h、Runner.cpp
+程序入口     固定惯例         main.cpp
+```
+
+命名风格没有唯一标准，项目内部一致最重要。
+
+---
 
 # Linux 命令与重定向
 
-## 3. system()
+## 5. `system()`
 
-作用：
+`std::system()` 让程序调用 Shell 执行命令：
 
-让程序调用 shell 执行命令。
-
-示例：
-
-``` cpp
-string cmd = "ls";
-int res = system(cmd.c_str());
+```cpp
+std::string cmd = "ls";
+int res = std::system(cmd.c_str());
 ```
 
-当前阶段：
+当前阶段约定：
 
-``` text
-返回 0：
-认为成功
-
-非 0：
-认为失败
+```text
+res == 0  命令成功
+res != 0  命令失败
 ```
 
-注意：
+限制：当前不能精确区分程序崩溃、命令不存在、具体退出原因等情况。
 
-`system()` 无法精确区分：
+后续将使用：
 
--   编译错误
--   程序崩溃
--   命令不存在
-
-后续使用：
-
-``` text
+```text
 fork
 exec
+dup2
 waitpid
 ```
 
-替代。
+替代 `system()`。
 
-------------------------------------------------------------------------
+---
 
-## 4. Linux 标准输入输出
+## 6. Linux 标准输入输出
 
 文件描述符：
 
-``` text
-0 : stdin 标准输入
-1 : stdout 标准输出
-2 : stderr 标准错误
+```text
+0  stdin   标准输入
+1  stdout  标准输出
+2  stderr  标准错误
 ```
 
 重定向：
 
-``` bash
-< input.txt
+```bash
+program < input.txt
+program > output.txt
+program 2> error.log
 ```
 
-标准输入来自文件。
+分别表示从文件读取标准输入、把标准输出写入文件、把标准错误写入文件。
 
-``` bash
-> output.txt
-```
+---
 
-标准输出写入文件。
+## 7. `diff` 比较
 
-``` bash
-2> error.log
-```
+当前命令：
 
-标准错误写入文件。
-
-------------------------------------------------------------------------
-
-## 5. diff 比较
-
-命令：
-
-``` bash
+```bash
 diff -wB actual.out expected.out
 ```
 
 参数：
 
-``` text
--w
-忽略空白字符差异
-
--B
-忽略空白行
+```text
+-w  忽略空白字符差异
+-B  忽略空白行
 ```
 
 返回值：
 
-``` text
-0:
-文件相同
-
-1:
-文件不同
-
->1:
-diff 执行错误
+```text
+0   文件相同
+1   文件不同
+>1  diff 执行错误
 ```
 
-------------------------------------------------------------------------
+---
 
-## 6. /dev/null
+## 8. `/dev/null`
 
-Linux 黑洞文件。
+`/dev/null` 是 Linux 的黑洞文件，写入内容会被丢弃：
 
-写入内容会被丢弃。
-
-例如：
-
-``` bash
+```bash
 command > /dev/null
 ```
 
-隐藏标准输出。
+用途：隐藏不需要的标准输出。
 
-------------------------------------------------------------------------
+---
 
-# MiniJudge v0.1
+# MiniJudge 基础流程
 
-## 7. compile()
+## 9. `compile()`
 
-作用：
+职责：
 
--   调用 g++ 编译用户代码
--   生成可执行文件
--   保存编译错误日志
--   返回编译结果
+```text
+调用 g++ 编译源码
+生成可执行文件
+保存编译错误日志
+返回编译是否成功
+```
 
 接口：
 
-``` cpp
+```cpp
 bool compile(
-    const string& code,
-    const string& exe
+    const std::string& code,
+    const std::string& exe
 );
 ```
 
 实际命令：
 
-``` bash
+```bash
 g++ source.cpp -std=c++17 -O2 -o program 2> tmp/compile.log
 ```
 
-常见坑：
+常见坑：不能根据可执行文件是否存在判断编译成功，因为旧文件可能残留。
 
-不能通过：
+---
 
-``` text
-可执行文件是否存在
+## 10. `run()`
+
+职责：
+
+```text
+运行用户程序
+把测试输入重定向到 stdin
+把程序输出重定向到文件
+统计运行时间
+返回运行状态和耗时
 ```
 
-判断编译成功。
+数据流：
 
-原因：
-
-旧文件可能残留。
-
-------------------------------------------------------------------------
-
-## 8. run()
-
-作用：
-
-运行用户程序。
-
-流程：
-
-``` text
+```text
 输入文件
- ↓
-stdin
- ↓
+   ↓
+ stdin
+   ↓
 用户程序
- ↓
-stdout
- ↓
-输出文件
+   ↓
+ stdout
+   ↓
+实际输出文件
 ```
 
 命令：
 
-``` bash
+```bash
 ./program < test.in > actual.out
 ```
 
-当前：
+接口返回：
 
-`system()` 非 0 只能认为运行失败。
-
-无法精确判断：
-
--   RE
--   TLE
-
-------------------------------------------------------------------------
-
-## 9. compare()
-
-作用：
-
-比较：
-
-``` text
-实际输出
-vs
-标准答案
+```cpp
+RunResult run(
+    const std::string& exePath,
+    const std::string& inputPath,
+    const std::string& actualOutputPath
+);
 ```
 
-使用：
+当前限制：`system()` 非零只能统一判断为 `Run failed`，无法精确区分 RE 和 TLE。
 
-``` bash
-diff
+---
+
+## 11. `compare()`
+
+职责：比较实际输出和标准答案。
+
+```text
+actual output
+      vs
+expected output
 ```
 
-当前流程：
+当前使用 `diff -wB`，返回比较是否通过。
 
-``` text
-编译
- ↓
-运行
- ↓
-比较
- ↓
-AC / WA / CE
+完整流程：
+
+```text
+compile
+   ↓
+run + timing
+   ↓
+compare
+   ↓
+AC / WA / CE / Run failed
 ```
 
-------------------------------------------------------------------------
+---
 
-# Git
+# 运行时间统计
 
-## 10. Git 基本流程
+## 12. `std::chrono::steady_clock`
 
-三个区域：
+需要头文件：
 
-``` text
-工作区
- ↓ git add
-暂存区
- ↓ git commit
-本地仓库
- ↓ git push
-远程仓库
+```cpp
+#include <chrono>
 ```
 
-------------------------------------------------------------------------
+`steady_clock` 是单调递增的时钟，适合测量时间间隔，不受系统日期时间调整影响。
 
-## 11. git init
-
-作用：
-
-初始化 Git 仓库。
-
-生成：
-
-``` text
-.git/
+```cpp
+auto start = std::chrono::steady_clock::now();
+// 待测操作
+auto end = std::chrono::steady_clock::now();
 ```
 
-保存版本信息。
+`now()` 返回当前时钟上的一个时间点；两个时间点相减得到时间长度：
 
-------------------------------------------------------------------------
-
-## 12. .gitignore
-
-作用：
-
-告诉 Git 哪些文件不要提交。
-
-例如：
-
-``` gitignore
-tmp/*
-!tmp/.gitkeep
+```cpp
+auto elapsed = end - start;
 ```
 
-------------------------------------------------------------------------
+常见坑：测量程序耗时应使用 `steady_clock`，不要依赖可能发生跳变的系统日历时间。
 
-## 13. git commit
+---
 
-作用：
+## 13. `duration_cast`
 
-保存一次版本。
+`end - start` 的底层单位由时钟实现决定，需要显式转换：
 
-推荐格式：
-
-``` text
-type: description
+```cpp
+long long elapsedUs =
+    std::chrono::duration_cast<std::chrono::microseconds>(
+        end - start
+    ).count();
 ```
 
-例如：
-
-``` bash
-git commit -m "feat: implement basic judge flow"
+```text
+duration_cast  转换时间单位
+microseconds   目标单位为微秒
+count()         取出数值
 ```
 
-------------------------------------------------------------------------
+当前使用微秒保存，避免极短程序直接转换为整数毫秒后显示为 `0`。
 
-# C++ 多文件项目
+---
 
-## 14. src 与 include
+## 14. Runner 的计时范围
 
-工程常见结构：
+当前顺序：
 
-``` text
-src/
-    .cpp 文件
-
-include/
-    .h 文件
+```text
+构造命令
+记录 start
+调用 system()
+记录 end
+计算耗时
+返回 RunResult
 ```
 
-含义：
+Checker 的 `diff` 不计入 Runner 的运行时间。
 
-``` text
-src
-source code
+即使运行失败，也应保留已经测得的耗时：
 
-include
-header files
+```cpp
+return {res == 0, elapsedUs};
 ```
 
-------------------------------------------------------------------------
+常见坑：失败分支直接返回 `{false, 0}` 会丢失真实耗时。
 
-## 15. 头文件与源文件
+---
 
-`.h`
+## 15. 当前时间是墙上时间
 
-负责：
+在 `system()` 前后计时得到的是完整墙上时间，包括：
 
-声明接口。
-
-`.cpp`
-
-负责：
-
-实现功能。
-
-------------------------------------------------------------------------
-
-## 16. #pragma once
-
-作用：
-
-防止头文件重复包含。
-
-写在头文件顶部：
-
-``` cpp
-#pragma once
+```text
+启动 Shell
+解析命令
+创建进程
+打开输入输出文件
+执行重定向
+运行用户程序
+等待进程结束
 ```
 
-------------------------------------------------------------------------
+因此极短程序也可能显示数毫秒，并且在虚拟机中存在明显波动。
 
-## 17. 多文件编译
+不能通过预运行再减去所谓“空跑时间”消除开销，因为每次调度和缓存状态不同，额外运行还会改变程序状态。
 
-例如：
+---
 
-``` bash
-g++ src/main.cpp src/Compiler.cpp \
--Iinclude \
--std=c++17 \
--Wall \
--Wextra \
--o tmp/minijudge
+## 16. `std::fixed` 与 `std::setprecision`
+
+需要头文件：
+
+```cpp
+#include <iomanip>
+```
+
+统一输出三位小数：
+
+```cpp
+std::cout << std::fixed << std::setprecision(3);
+```
+
+配合输出：
+
+```cpp
+std::cout << elapsedMicroseconds / 1000.0 << " ms";
 ```
 
 说明：
 
-多个 `.cpp` 一起参与编译和链接。
+```text
+fixed           使用定点小数形式
+setprecision(3) 保留 3 位小数
+```
 
-------------------------------------------------------------------------
+格式设置会持续作用于同一个输出流，不必在每个分支重复设置。
+
+常见坑：没有 `fixed` 时，`setprecision(3)` 表示三位有效数字，不是三位小数。
+
+---
+
+# Git
+
+## 17. Git 基本流程
+
+```text
+工作区
+  ↓ git add
+暂存区
+  ↓ git commit
+本地仓库
+  ↓ git push
+远程仓库
+```
+
+---
+
+## 18. `git init`
+
+初始化 Git 仓库：
+
+```bash
+git init
+```
+
+生成 `.git/`，用于保存版本信息。
+
+---
+
+## 19. `.gitignore`
+
+指定不提交的文件：
+
+```gitignore
+tmp/*
+!tmp/.gitkeep
+```
+
+---
+
+## 20. `git commit`
+
+保存一次版本：
+
+```bash
+git commit -m "feat: implement basic judge flow"
+```
+
+当前提交信息格式：
+
+```text
+type: description
+```
+
+常用类型：
+
+```text
+feat  新功能
+fix   修复问题
+docs  文档更新
+refactor 代码重构
+```
+
+---
+
+## 21. 查看历史
+
+```bash
+git log --oneline
+git show <commit_id>
+git show --stat <commit_id>
+```
+
+---
+
+## 22. 修改最近一次提交
+
+最近一次提交尚未推送，并且需要补充遗漏内容：
+
+```bash
+git add <files>
+git commit --amend --no-edit
+```
+
+提交哈希会改变。
+
+---
+
+## 23. 撤回提交但保留代码
+
+```bash
+git reset --soft HEAD~1
+```
+
+结果：最近一次提交被撤回，代码仍保留在暂存区。
+
+常见坑：`git reset --hard` 会丢弃工作区修改，不应随意使用。
+
+---
+
+# C++ 多文件项目
+
+## 24. `src` 与 `include`
+
+```text
+src/      .cpp 实现文件
+include/  .h 接口文件
+```
+
+`.h` 负责声明接口，`.cpp` 负责实现功能。
+
+---
+
+## 25. `#pragma once`
+
+写在头文件顶部，防止头文件被重复包含：
+
+```cpp
+#pragma once
+```
+
+---
+
+## 26. 多文件编译
+
+```bash
+g++ src/main.cpp src/Compiler.cpp \
+    -Iinclude \
+    -std=c++17 \
+    -Wall \
+    -Wextra \
+    -o tmp/minijudge
+```
+
+多个 `.cpp` 会分别编译，最后链接为一个可执行文件。
+
+---
+
+## 27. 模块拆分原则
+
+模块按职责拆分，不采用“一函数一个 `.h/.cpp`”。
+
+当前职责：
+
+```text
+Compiler          编译用户程序
+Runner            运行、重定向和计时
+Checker           比较输出
+TestCasesFinder   发现并校验测试数据
+main              组织完整评测流程
+```
+
+新功能优先并入已有职责明确的模块，只有出现新的独立职责时才考虑新增模块。
+
+---
 
 # C++ 命名空间
 
-## 18. std::
+## 28. `std::`
 
-`std` 是 C++ 标准库命名空间。
+`std` 是 C++ 标准库命名空间：
 
-例如：
-
-``` cpp
+```cpp
 std::string
 std::cout
 std::vector
 ```
 
-------------------------------------------------------------------------
+---
 
-## 19. using namespace std
+## 29. `using namespace std`
 
-可以省略：
+使用后可以省略 `std::`，但工程代码中建议显式写出标准库命名空间。
 
-``` cpp
-std::
+尤其不要在头文件中写：
+
+```cpp
+using namespace std;
 ```
 
-但是工程中：
+因为它会影响所有包含该头文件的源文件。
 
--   `.cpp` 可以使用
--   `.h` 不建议使用
-
-------------------------------------------------------------------------
+---
 
 # GCC 编译参数
 
-## 20. -Wall
+## 30. `-Wall` 与 `-Wextra`
 
-开启常见编译警告。
+```text
+-Wall   开启常见编译警告
+-Wextra 开启更多额外警告
+```
 
-------------------------------------------------------------------------
+通常一起使用：
 
-## 21. -Wextra
-
-开启更多额外警告。
-
-通常：
-
-``` bash
+```bash
 -Wall -Wextra
 ```
 
-一起使用。
+警告不等于编译错误，但应认真检查。
 
-------------------------------------------------------------------------
-
-# GitHub
-
-## 22. remote
-
-添加远程仓库：
-
-``` bash
-git remote add origin 仓库地址
-```
-
-查看：
-
-``` bash
-git remote -v
-```
-
-------------------------------------------------------------------------
-
-## 23. git push
-
-第一次：
-
-``` bash
-git push -u origin main
-```
-
-以后：
-
-``` bash
-git push
-```
-
-------------------------------------------------------------------------
-
-## 24. 查看历史
-
-``` bash
-git log --oneline
-```
-
-查看提交：
-
-``` bash
-git show commit_id
-```
-
-查看统计：
-
-``` bash
-git show --stat
-```
-
-------------------------------------------------------------------------
-
-# MiniJudge 当前状态
-
-## v0.1
-
-基础评测流程：
-
-``` text
-用户源码
- ↓
-compile()
- ↓
-生成程序
- ↓
-run()
- ↓
-实际输出
- ↓
-compare()
- ↓
-AC / WA / CE
-```
-
-------------------------------------------------------------------------
-
-## v0.2
-
-模块拆分完成：
-
-``` text
-include/
-    Compiler.h
-    Runner.h
-    Checker.h
-
-src/
-    main.cpp
-    Compiler.cpp
-    Runner.cpp
-    Checker.cpp
-```
-
-职责：
-
-``` text
-Compiler.cpp
-编译用户程序
-
-Runner.cpp
-运行用户程序
-
-Checker.cpp
-比较输出
-
-main.cpp
-控制评测流程
-```
-
-------------------------------------------------------------------------
-
-------------------------------------------------------------------------
+---
 
 # CMake
 
-## 25. CMakeLists.txt
+## 31. `CMakeLists.txt`
 
-作用：
+CMake 统一管理项目的编译和链接：
 
-统一管理项目的编译和链接。
-
-当前目标：
-
-``` cmake
+```cmake
 add_executable(minijudge
     src/main.cpp
     src/Compiler.cpp
     src/Runner.cpp
     src/Checker.cpp
-    src/TestCaseFinder.cpp
+    src/TestCasesFinder.cpp
 )
 ```
 
 头文件目录：
 
-``` cmake
+```cmake
 target_include_directories(minijudge PRIVATE include)
 ```
 
 这样源码中可以直接写：
 
-``` cpp
-#include "Compiler.h"
+```cpp
+#include "Runner.h"
 ```
 
-------------------------------------------------------------------------
+常见坑：新增 `.cpp` 后没有加入 `CMakeLists.txt`，可能出现 `undefined reference`。
 
-## 26. CMake 构建命令
+---
+
+## 32. CMake 构建命令
 
 配置项目：
 
-``` bash
+```bash
 cmake -S . -B build
 ```
 
 编译项目：
 
-``` bash
+```bash
 cmake --build build
 ```
 
-含义：
-
-``` text
--S .
-源码目录是当前目录
-
--B build
-构建文件放入 build/
-
-cmake --build build
-执行实际编译和链接
+```text
+-S .        源码目录是当前目录
+-B build    构建文件放入 build/
+--build     执行实际编译和链接
 ```
 
-常见坑：
-
-新增 `.cpp` 后必须加入 `CMakeLists.txt`，否则可能出现：
-
-``` text
-undefined reference
-```
-
-------------------------------------------------------------------------
+---
 
 # 命令行参数
 
-## 27. argc 与 argv
+## 33. `argc` 与 `argv`
 
 入口：
 
-``` cpp
+```cpp
 int main(int argc, char* argv[])
 ```
 
 运行：
 
-``` bash
+```bash
 ./build/minijudge examples/accepted.cpp
 ```
 
 对应：
 
-``` text
+```text
 argc == 2
 argv[0] == "./build/minijudge"
 argv[1] == "examples/accepted.cpp"
 ```
 
-说明：
+使用前必须检查：
 
-``` text
-argc
-参数数量，包含程序启动路径
-
-argv[0]
-程序启动路径
-
-argv[1]
-第一个用户参数
-```
-
-使用前检查：
-
-``` cpp
+```cpp
 if (argc < 2) {
     std::cerr << "Usage: "
               << argv[0]
@@ -730,54 +692,34 @@ if (argc < 2) {
 }
 ```
 
-读取源码路径：
+常见坑：检查 `argc` 前不能访问 `argv[1]`。
 
-``` cpp
-std::string code = argv[1];
-```
-
-常见坑：
-
-检查 `argc` 前不能访问 `argv[1]`。
-
-------------------------------------------------------------------------
+---
 
 # C++ 文件系统
 
-## 28. std::filesystem
+## 34. `std::filesystem`
 
 需要：
 
-``` cpp
+```cpp
 #include <filesystem>
 ```
 
-检查路径：
+常用判断：
 
-``` cpp
+```cpp
 std::filesystem::exists(path);
 std::filesystem::is_directory(path);
 ```
 
-区别：
+路径存在不代表它一定是目录。
 
-``` text
-exists()
-路径是否存在
+---
 
-is_directory()
-路径是否是目录
-```
+## 35. 遍历目录
 
-常见坑：
-
-路径存在，不代表它一定是目录。
-
-------------------------------------------------------------------------
-
-## 29. 遍历目录
-
-``` cpp
+```cpp
 for (const auto& entry :
      std::filesystem::directory_iterator(testDir)) {
     if (!entry.is_regular_file()) {
@@ -786,105 +728,59 @@ for (const auto& entry :
 }
 ```
 
-说明：
+`directory_iterator` 依次访问目录项，但遍历顺序没有保证。
 
-``` text
-directory_iterator
-依次访问目录项
+---
 
-is_regular_file()
-判断是否为普通文件
-```
+## 36. `path` 文件名操作
 
-目录遍历顺序没有保证。
-
-------------------------------------------------------------------------
-
-## 30. path 文件名操作
-
-``` cpp
+```cpp
 std::filesystem::path path = entry.path();
 
-std::string filename =
-    path.filename().string();
-
-std::string pre =
-    path.stem().string();
-
-std::string suf =
-    path.extension().string();
+std::string filename = path.filename().string();
+std::string stem = path.stem().string();
+std::string extension = path.extension().string();
 ```
 
-例如：
+示例：
 
-``` text
-文件名       stem       extension
-1.in         1          .in
-24#2.out     24#2       .out
-.in          .in        空字符串
+```text
+文件名     stem    extension
+1.in       1       .in
+24#2.out   24#2    .out
+.in        .in     空字符串
 ```
 
-注意：
+`.in` 是 Linux 隐藏文件名，不是空主名加 `.in` 扩展名，因此需要单独检查完整文件名。
 
-`.in` 是 Linux 隐藏文件名，不是：
+---
 
-``` text
-空主名 + .in 扩展名
-```
-
-因此需要单独判断完整文件名：
-
-``` cpp
-if (filename == ".in" ||
-    filename == ".out") {
-    // 非法空测试名
-}
-```
-
-------------------------------------------------------------------------
-
-## 31. filesystem 路径拼接
+## 37. 文件系统路径拼接
 
 推荐：
 
-``` cpp
+```cpp
 std::filesystem::path input =
-    std::filesystem::path(testDir) /
-    (name + ".in");
+    std::filesystem::path(testDir) / (name + ".in");
 ```
 
-需要传给 `string` 参数时：
+传给接收 `std::string` 的函数：
 
-``` cpp
+```cpp
 input.string()
 ```
 
-常见坑：
+常见坑：手动拼接字符串会依赖目录末尾是否带 `/`。
 
-手动拼接：
-
-``` cpp
-testDir + name + ".in"
-```
-
-会依赖 `testDir` 末尾是否有 `/`。
-
-------------------------------------------------------------------------
+---
 
 # 测试点自动发现
 
-## 32. 测试点配对规则
+## 38. 测试点配对规则
 
-当前规则：
+同名的 `<name>.in` 和 `<name>.out` 构成一个测试点：
 
-``` text
-同名的 <name>.in 和 <name>.out
-组成一个测试点
-```
-
-例如：
-
-``` text
+```text
 1.in       1.out
 24#2.in    24#2.out
 sample.in  sample.out
@@ -892,67 +788,46 @@ sample.in  sample.out
 
 测试名不要求是连续整数。
 
-------------------------------------------------------------------------
+---
 
-## 33. 使用 set 保存测试名
+## 39. 使用 `set` 保存测试名
 
-``` cpp
+```cpp
 std::set<std::string> inputNames;
 std::set<std::string> outputNames;
 ```
 
-发现输入文件：
+检查配对：
 
-``` cpp
-inputNames.insert(pre);
-```
-
-检查是否有对应输出：
-
-``` cpp
+```cpp
 if (outputNames.count(name) == 0) {
     // 缺少标准答案
 }
 ```
 
-双向检查：
+需要双向检查输入和输出，不能只统计文件数量再除以二。
 
-``` text
-遍历 inputNames
-检查对应 .out
+生成列表：
 
-遍历 outputNames
-检查对应 .in
+```cpp
+testNames.assign(inputNames.begin(), inputNames.end());
 ```
 
-生成测试列表：
+`std::set<std::string>` 按字符串字典序排列：
 
-``` cpp
-testNames.assign(
-    inputNames.begin(),
-    inputNames.end()
-);
-```
-
-`set<string>` 使用字符串字典序：
-
-``` text
+```text
 1 → 10 → 2 → 24#2
 ```
 
-常见坑：
+---
 
-统计目录文件数量再除以 2，无法识别缺失配对和无关文件。
-
-------------------------------------------------------------------------
-
-## 34. 测试名白名单
+## 40. 测试名白名单
 
 当前允许：
 
-``` text
+```text
 A-Z
-a-z
+ a-z
 0-9
 _
 -
@@ -960,38 +835,17 @@ _
 .
 ```
 
-判断：
+使用白名单是因为路径会被拼接到 Shell 命令中，需要避免空格和特殊字符改变命令含义。
 
-``` cpp
-bool valid =
-    ('a' <= ch && ch <= 'z') ||
-    ('A' <= ch && ch <= 'Z') ||
-    ('0' <= ch && ch <= '9') ||
-    ch == '_' ||
-    ch == '-' ||
-    ch == '#' ||
-    ch == '.';
-```
+常见坑：应先确认扩展名是 `.in` 或 `.out`，再校验测试名，避免无关文件被误判。
 
-原因：
+---
 
-当前通过 `system()` 拼接 Shell 命令，需要避免空格和 Shell 特殊字符改变命令含义。
-
-结论：
-
-白名单比不断补充危险字符黑名单更可靠。
-
-常见坑：
-
-应先确认扩展名是 `.in` 或 `.out`，再检查测试名；否则无关文件也会被误判。
-
-------------------------------------------------------------------------
-
-## 35. findTestCases()
+## 41. `findTestCases()`
 
 接口：
 
-``` cpp
+```cpp
 bool findTestCases(
     const std::string& testDir,
     std::vector<std::string>& testNames,
@@ -1001,217 +855,145 @@ bool findTestCases(
 
 参数：
 
-``` text
-testDir
-输入：测试目录
-
-testNames
-输出：测试点名称
-
-errMessage
-输出：失败原因
-
-返回值
-是否成功
+```text
+testDir     输入：测试目录
+testNames   输出：测试点名称
+errMessage  输出：失败原因
+返回值      是否成功
 ```
 
-函数开始时：
+函数开始时清空输出参数：
 
-``` cpp
+```cpp
 testNames.clear();
 errMessage.clear();
 ```
 
-成功时：
+失败后，调用方不能继续使用 `testNames` 进行评测。
 
-``` cpp
-testNames.assign(
-    inputNames.begin(),
-    inputNames.end()
-);
-return true;
+---
+
+# GitHub
+
+## 42. Remote 与 Push
+
+添加远程仓库：
+
+```bash
+git remote add origin <repository_url>
 ```
 
-失败时：
+查看：
 
-``` cpp
-errMessage = "...";
-return false;
+```bash
+git remote -v
 ```
 
-常见坑：
+第一次推送：
 
-函数返回失败后，调用方不能继续使用 `testNames`。
-
-------------------------------------------------------------------------
-
-# Git 补充
-
-## 36. 修改最近一次提交
-
-如果最近一次提交尚未推送，并且要把遗漏内容补进同一个提交：
-
-``` bash
-git add 文件
-git commit --amend --no-edit
+```bash
+git push -u origin main
 ```
 
-作用：
+以后：
 
-``` text
-amend
-修改最近一次提交
-
---no-edit
-保留原提交信息
+```bash
+git push
 ```
 
-提交哈希会改变。
-
-------------------------------------------------------------------------
-
-## 37. 撤回提交但保留代码
-
-``` bash
-git reset --soft HEAD~1
-```
-
-结果：
-
-``` text
-最近一次提交被撤回
-代码修改不会丢失
-修改仍保留在暂存区
-```
-
-不要随意使用：
-
-``` bash
-git reset --hard HEAD~1
-```
-
-因为它会删除工作区修改。
-
-------------------------------------------------------------------------
+---
 
 # 工程设计结论
 
-## 38. 不要过早抽象
+## 43. 不要过早抽象
 
-只有数据需要：
+只有数据确实需要保存、传递、统计或统一处理时，才增加额外类型或转换函数。
 
-``` text
-保存
-传递
-统计
-统一处理
-```
+当前运行结果需要同时返回状态和耗时，因此 `RunResult` 有明确价值；尚未需要统一保存所有评测结果，因此暂时不增加复杂报告类型。
 
-时，才需要额外类型或转换函数。
-
-当前评测结果判断后立即输出，因此暂时不需要：
-
-``` cpp
-enum class JudgeResult
-```
-
-常见坑：
-
-为了使用新语法，增加没有实际收益的变量和函数。
-
-------------------------------------------------------------------------
+---
 
 # MiniJudge 当前状态
 
-## v0.1
+## v0.1 基础评测流程
 
-基础评测流程完成：
-
-``` text
+```text
 compile
 → run
 → compare
 → AC / WA / CE / Run failed
 ```
 
-------------------------------------------------------------------------
+## v0.2 模块拆分
 
-## v0.2
-
-基础模块拆分完成：
-
-``` text
+```text
 Compiler
 Runner
 Checker
 main
 ```
 
-------------------------------------------------------------------------
+## v0.3 CMake 构建
 
-## v0.3
-
-CMake 构建完成：
-
-``` bash
+```bash
 cmake -S . -B build
 cmake --build build
 ```
 
-------------------------------------------------------------------------
+## v0.4 命令行源码路径
 
-## v0.4
-
-命令行源码路径完成：
-
-``` bash
+```bash
 ./build/minijudge examples/accepted.cpp
 ```
 
-------------------------------------------------------------------------
+## v0.5 测试点自动发现
 
-## v0.5
-
-测试点自动发现完成：
-
-``` text
-TestCaseFinder
+```text
 扫描 tests/
 校验 .in / .out 配对
-返回测试点名称列表
+校验测试名
+返回测试点列表
+```
+
+## v0.6 每个测试点运行时间统计
+
+```text
+Runner 返回 RunResult
+steady_clock 测量墙上时间
+微秒保存
+毫秒显示并保留三位小数
+AC / WA / Run failed 均输出耗时
 ```
 
 当前项目结构：
 
-``` text
+```text
 include/
     Compiler.h
     Runner.h
     Checker.h
-    TestCaseFinder.h
+    TestCasesFinder.h
 
 src/
     main.cpp
     Compiler.cpp
     Runner.cpp
     Checker.cpp
-    TestCaseFinder.cpp
+    TestCasesFinder.cpp
 ```
 
-------------------------------------------------------------------------
+---
 
 # 当前尚未完成
 
-``` text
-每个测试点运行时间统计
-TLE
-精确区分 RE
+```text
+TLE 检测和进程终止
+精确区分运行时错误
 文件系统异常处理
 Shell 参数完整转义
 支持带空格的路径
 修复必须从项目根目录运行的问题
 fork / exec / dup2 / waitpid
-内存和其他资源限制
+CPU 时间、内存和其他资源限制
 结构化评测报告
 ```
-
