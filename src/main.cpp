@@ -15,7 +15,6 @@ int main(int argc, char* argv[]){
         std::cerr << "Usage: " << argv[0] << " <source_path>\n";
         return 1;
     }
-
     
     std::string testDir = "tests";
     std::string errMessage;
@@ -40,7 +39,11 @@ int main(int argc, char* argv[]){
 
         RunResult runResult = run(exe, input.string(), actualOutput.string());
         std::cout << "Test " << name << ": ";
-        if(!runResult.success){
+        if(runResult.status == 1){
+            std::cout << "RE (" << runResult.elapsedMicroseconds / 1000.0 << " ms)\n";
+            continue;
+        }
+        else if(runResult.status == 2){
             std::cout << "Run failed (" << runResult.elapsedMicroseconds / 1000.0 << " ms)\n";
             continue;
         }

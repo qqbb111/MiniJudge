@@ -2,7 +2,7 @@
 #include <string>
 
 struct RunResult{
-    bool success;
+    int status; // 0 -> OK, 1 -> RE, 2 -> Run failed
     long long elapsedMicroseconds;
 };
 
