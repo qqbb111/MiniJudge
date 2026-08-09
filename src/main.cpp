@@ -39,20 +39,24 @@ int main(int argc, char* argv[]){
 
         RunResult runResult = run(exe, input.string(), actualOutput.string());
         std::cout << "Test " << name << ": ";
-        if(runResult.status == 1){
-            std::cout << "RE (" << runResult.elapsedMicroseconds / 1000.0 << " ms)\n";
+        if(runResult.status == RunStatus::RuntimeError){
+            std::cout << "RE (" << runResult.timeUs / 1000.0 << " ms)\n";
             continue;
         }
-        else if(runResult.status == 2){
-            std::cout << "Run failed (" << runResult.elapsedMicroseconds / 1000.0 << " ms)\n";
+        if(runResult.status == RunStatus::InternalError){
+            std::cout << "Run failed (" << runResult.timeUs / 1000.0 << " ms)\n";
+            continue;
+        }
+        if(runResult.status == RunStatus::TimeLimitExceeded){
+            std::cout << "TLE (" << runResult.timeUs / 1000.0 << " ms)\n";
             continue;
         }
 
         if(compare(actualOutput.string(), expected.string())){ 
-            std::cout << "AC (" << runResult.elapsedMicroseconds / 1000.0 << " ms)\n";
+            std::cout << "AC (" << runResult.timeUs / 1000.0 << " ms)\n";
         }
         else{
-            std::cout << "WA (" << runResult.elapsedMicroseconds / 1000.0 << " ms)\n";
+            std::cout << "WA (" << runResult.timeUs / 1000.0 << " ms)\n";
         }
     }
 

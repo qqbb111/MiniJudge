@@ -1,9 +1,16 @@
 #pragma once
 #include <string>
 
+enum class RunStatus{
+    Ok,
+    RuntimeError,
+    TimeLimitExceeded,
+    InternalError
+};
+
 struct RunResult{
-    int status; // 0 -> OK, 1 -> RE, 2 -> Run failed
-    long long elapsedMicroseconds;
+    RunStatus status;
+    long long timeUs;
 };
 
 RunResult run(const std::string& exePath, const std::string& inputPath, const std::string& actualOutputPath);

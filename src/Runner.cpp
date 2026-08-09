@@ -6,6 +6,7 @@
 #include <sys/wait.h> // waitpid, WIFEXITED, WEXITSTATUS
 #include <fcntl.h> // open, O_RDONLY...
 #include <cstdio> // perror
+#include <signal.h> // SIGKILL
 
 RunResult run(const std::string& exePath, const std::string& inputPath, const std::string& actualOutputPath){
     auto start = std::chrono::steady_clock::now();
@@ -16,7 +17,7 @@ RunResult run(const std::string& exePath, const std::string& inputPath, const st
     int pipeFd[2]; // fork 之前创建管道，供父子进程间通信
     if(pipe(pipeFd) == -1){
         std::perror("pipe");
-        return {2, getElapsedUs()};
+        return {RunStatus::InternalError, getElapsedUs()};
     }
 
     pid_t pid = fork();
@@ -24,7 +25,7 @@ RunResult run(const std::string& exePath, const std::string& inputPath, const st
         std::perror("fork");
         close(pipeFd[0]);
         close(pipeFd[1]);
-        return {2, getElapsedUs()};
+        return {RunStatus::InternalError, getElapsedUs()};
     }
 
     if(pid == 0){
@@ -66,10 +67,25 @@ RunResult run(const std::string& exePath, const std::string& inputPath, const st
     close(pipeFd[1]); // 父进程关写
 
     int sta; // waitpid 写入子进程结束状态；正常退出 WIFEXITED / WEXITSTATUS；信号终止 WIFSIGNALED / WTERMSIG
-    if(waitpid(pid, &sta, 0) == -1){
-        std::perror("waitpid");
-        close(pipeFd[0]);
-        return {2, getElapsedUs()};
+    bool timeOut = false;
+    while(1){
+        pid_t waitpidResult = waitpid(pid, &sta, WNOHANG);
+        if(waitpidResult == -1){
+            std::perror("waitpid");
+            close(pipeFd[0]);
+            return {RunStatus::InternalError, getElapsedUs()};
+        }
+        if(waitpidResult > 0){
+            break;
+        }
+        long long elapsedUs = getElapsedUs();
+        if(elapsedUs > 1000 * 1000){
+            kill(pid, SIGKILL);
+            waitpid(pid, &sta, 0); // 回收被杀死的子进程，防止僵尸进程，读取signal终止状态信息
+            timeOut = true;
+            break;
+        }
+        usleep(1000);
     }
     
     char errorFlag;
@@ -78,25 +94,29 @@ RunResult run(const std::string& exePath, const std::string& inputPath, const st
 
     if(byteRead == -1){
         std::perror("read");
-        return {2, getElapsedUs()};
+        return {RunStatus::InternalError, getElapsedUs()};
     }
     
     // 这种分法就是看是不是 MiniJudge 自己的问题，自己的问题肯定只有 byteRead > 0
     if(byteRead > 0){
-        return {2, getElapsedUs()};
+        return {RunStatus::InternalError, getElapsedUs()};
     }
     
-    if(WIFSIGNALED(sta)){ // 用户程序因信号停止，判 RE
-        return {1, getElapsedUs()};
+    if(timeOut){
+        return {RunStatus::TimeLimitExceeded, getElapsedUs()};
+    } 
+    
+    if(WIFSIGNALED(sta)){ // 用户程序因信号停止，判 RE / TLE
+        return {RunStatus::RuntimeError, getElapsedUs()};
     }
 
     // 只剩下用户代码正常退出的情况了，那就看 return 的值（也就是退出码）是不是 0 了。是 0 就 OK，否则 RE
     if(WIFEXITED(sta) && (WEXITSTATUS(sta) != 0)){ // 进程正常退出，但退出码非 0;
-        return {1, getElapsedUs()};
+        return {RunStatus::RuntimeError, getElapsedUs()};
     }
     if(WIFEXITED(sta) && (WEXITSTATUS(sta) == 0)){
-        return {0, getElapsedUs()};
+        return {RunStatus::Ok, getElapsedUs()};
     }
 
-    return {2, getElapsedUs()};
+    return {RunStatus::InternalError, getElapsedUs()};
 }
