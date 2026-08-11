@@ -1,234 +1,362 @@
 # MiniJudge 学习笔记
 
-> 只记录已经在项目中实际遇到、理解并验证过的知识。
-
-# 1. 当前评测流程
-
-```text
-读取源码路径
-    ↓
-扫描并校验测试点
-    ↓
-编译用户源码
-    ↓
-fork 创建子进程
-    ↓
-open + dup2 重定向输入输出
-    ↓
-execv 执行用户程序
-    ↓
-父进程 waitpid 获取结束状态
-    ↓
-判断 OK / RE / Run failed
-    ↓
-OK 才进入 compare
-    ↓
-AC / WA
-```
-
-当前结果：
-
-```text
-AC          输出正确
-WA          输出错误
-CE          编译错误
-RE          用户程序运行错误
-Run failed  MiniJudge 自身运行流程失败
-```
-
 ---
 
-# 2. C++ 基础
+# C++ 基础
 
-## 2.1 `const T&`
+## 1. `const T&` 传参
 
-只读的大对象通常使用常量引用：
+只读的 `string`、`vector` 等对象通常使用：
 
 ```cpp
 bool run(const std::string& path);
 ```
 
+区别：
+
 ```text
 T        复制对象
-T&       引用，可以修改
+T&       引用，可修改
 const T& 引用，不可修改
 ```
 
-结论：避免复制，同时防止误修改。
+作用：
 
-常见坑：`int`、`char` 等小型基础类型通常直接值传递。
-
----
-
-## 2.2 `std::` 与头文件
-
-`std` 是 C++ 标准库命名空间：
-
-```cpp
-std::string
-std::cout
-std::vector
-```
-
-工程代码优先显式写 `std::`，头文件中不要写：
-
-```cpp
-using namespace std;
-```
-
-按实际依赖包含头文件，不使用：
-
-```cpp
-#include <bits/stdc++.h>
-```
-
-常见坑：代码能编译不代表头文件依赖正确，可能只是被其他头文件间接包含。
+* 避免复制
+* 防止函数修改原对象
 
 ---
 
-## 2.3 `c_str()` 与 `data()`
+## 2. `std::string::c_str()`
 
-传统 C 接口常需要字符指针：
+将 `std::string` 转换为：
 
 ```cpp
-std::string path = "tmp/user_program";
-open(path.c_str(), O_RDONLY);
+const char*
 ```
 
-`c_str()` 返回 `const char*`。
+例如：
 
-C++17 中，非 `const std::string` 的 `data()` 可得到可修改的字符指针，因此当前 `execv()` 参数数组使用：
+```cpp
+std::string cmd = "ls";
+system(cmd.c_str());
+```
+
+常用于传统 C 接口。
+
+---
+
+## 3. `std::string::data()`
+
+C++17 中：
 
 ```cpp
 std::string program = exePath;
 char* argv[] = {program.data(), nullptr};
-execv(program.c_str(), argv);
 ```
 
-常见坑：字符串被修改或销毁后，之前取得的内部指针可能失效。
+可用于构造 `execv()` 的参数数组。
 
----
-
-## 2.4 结构体保存一组结果
-
-当前：
-
-```cpp
-struct RunResult {
-    int status; // 0 -> OK, 1 -> RE, 2 -> Run failed
-    long long elapsedMicroseconds;
-};
-```
-
-作用：一次返回运行状态和耗时。
-
-聚合初始化：
-
-```cpp
-return {1, elapsedUs};
-```
-
-当前状态较少，先使用整数；如果结果类型继续增加，再考虑 `enum class`。
-
----
-
-## 2.5 Lambda 基础
-
-Lambda 是定义在当前位置的小函数：
-
-```cpp
-auto f = [捕获](参数) {
-    // 函数体
-};
-```
-
-常见捕获：
+注意：
 
 ```text
-[]     不捕获外部局部变量
-[&]    按引用捕获需要的外部变量
-[=]    按值捕获需要的外部变量
-[&x]   只按引用捕获 x
-[x]    只按值捕获 x
+argv 最后一项必须是 nullptr
 ```
-
-当前 Runner：
-
-```cpp
-auto getElapsedUs = [&start]() {
-    return std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now() - start
-    ).count();
-};
-```
-
-用于消除重复计时代码。
-
-子进程错误处理：
-
-```cpp
-auto childFail = [&](const char* message) {
-    std::perror(message);
-    char errorFlag = 1;
-    write(pipeFd[1], &errorFlag, sizeof(errorFlag));
-    _exit(1);
-};
-```
-
-结论：只在当前函数内有意义的少量重复逻辑，可以使用局部 lambda，不必额外拆模块。
 
 ---
 
-# 3. 多文件工程
+## 4. `std::string::find()`
 
-## 3.1 `.h` 与 `.cpp`
+查找字符串：
 
-```text
-.h    声明模块提供什么
-.cpp  实现模块具体怎么做
+```cpp
+auto pos = line.find("CoreDumping:");
 ```
 
-头文件：
+判断是否找到：
+
+```cpp
+if (pos != std::string::npos) {
+}
+```
+
+`npos` 表示：
+
+```text
+not found
+```
+
+---
+
+## 5. `size_t`
+
+常用于表示：
+
+```text
+长度
+大小
+字符串位置
+容器下标
+```
+
+例如：
+
+```cpp
+size_t pos = str.find(':');
+```
+
+不知道具体返回类型时也可以：
+
+```cpp
+auto pos = str.find(':');
+```
+
+---
+
+## 6. `substr()`
+
+截取字符串：
+
+```cpp
+std::string s = "abc: 123";
+
+auto pos = s.find(':');
+std::string value = s.substr(pos + 1);
+```
+
+结果：
+
+```text
+" 123"
+```
+
+---
+
+## 7. `std::stoi()`
+
+将字符串转换为整数：
+
+```cpp
+int value = std::stoi("   1");
+```
+
+结果：
+
+```text
+1
+```
+
+---
+
+# Linux 标准输入输出
+
+## 8. 文件描述符
+
+Linux 默认：
+
+```text
+0 stdin
+1 stdout
+2 stderr
+```
+
+对应：
+
+```cpp
+STDIN_FILENO
+STDOUT_FILENO
+STDERR_FILENO
+```
+
+---
+
+## 9. Shell 重定向
+
+```bash
+./program < input.txt > output.txt
+```
+
+等价流程：
+
+```text
+input.txt
+→ stdin
+→ program
+→ stdout
+→ output.txt
+```
+
+错误输出：
+
+```bash
+2> error.log
+```
+
+---
+
+## 10. `/dev/null`
+
+Linux 黑洞文件：
+
+```bash
+command > /dev/null
+```
+
+写入内容直接丢弃。
+
+---
+
+# system()
+
+## 11. `system()`
+
+让程序调用 Shell 执行命令：
+
+```cpp
+std::string cmd = "ls";
+int result = system(cmd.c_str());
+```
+
+第一版 MiniJudge 使用：
+
+```text
+Compiler
+Runner
+Checker
+```
+
+执行外部命令。
+
+缺点：
+
+* 依赖 Shell
+* 路径转义复杂
+* 无法精确控制子进程
+* 不方便实现 RE/TLE
+
+当前 Runner 已改为 Linux 进程接口。
+
+---
+
+# 编译
+
+## 12. compile()
+
+接口：
+
+```cpp
+bool compile(
+    const std::string& sourcePath,
+    const std::string& executablePath
+);
+```
+
+核心命令：
+
+```bash
+g++ source.cpp -std=c++17 -O2 \
+-o tmp/user_program \
+2> tmp/compile.log
+```
+
+失败：
+
+```text
+CE
+```
+
+常见坑：
+
+不能通过“可执行文件是否存在”判断编译成功，因为旧文件可能残留。
+
+---
+
+# 输出比较
+
+## 13. `diff`
+
+当前使用：
+
+```bash
+diff -wB actual.out expected.out
+```
+
+返回值：
+
+```text
+0 文件相同
+1 文件不同
+>1 diff 自身错误
+```
+
+参数：
+
+```text
+-w 忽略空白字符差异
+-B 忽略空白行
+```
+
+---
+
+# 多文件项目
+
+## 14. `.h` 与 `.cpp`
+
+`.h`：
+
+```text
+声明接口
+定义公共类型
+```
+
+`.cpp`：
+
+```text
+实现功能
+```
+
+当前按照职责拆分模块，不采用“一函数一个文件”。
+
+---
+
+## 15. `#pragma once`
+
+写在头文件顶部：
 
 ```cpp
 #pragma once
 ```
 
-防止一次编译中重复包含。
+避免头文件重复包含。
 
-项目按职责拆分，不采用“一函数一个 `.h/.cpp`”。
+---
 
-当前模块：
+## 16. `std::`
 
-```text
-Compiler          编译用户源码
-Runner            运行、重定向、进程管理、计时
-Checker           比较输出
-TestCasesFinder   发现并校验测试数据
-main              组织完整流程
+`std` 是 C++ 标准库命名空间：
+
+```cpp
+std::string
+std::vector
+std::cout
+```
+
+工程头文件中不建议：
+
+```cpp
+using namespace std;
 ```
 
 ---
 
-## 3.2 CMake
+# CMake
 
-配置：
+## 17. CMakeLists.txt
 
-```bash
-cmake -S . -B build
-```
-
-构建：
-
-```bash
-cmake --build build
-```
-
-当前目标：
+定义构建目标：
 
 ```cmake
-add_executable(
-    minijudge
+add_executable(minijudge
     src/main.cpp
     src/Compiler.cpp
     src/Runner.cpp
@@ -240,22 +368,46 @@ add_executable(
 头文件目录：
 
 ```cmake
-target_include_directories(minijudge PRIVATE include)
+target_include_directories(
+    minijudge PRIVATE include
+)
 ```
-
-警告选项：
-
-```cmake
--Wall -Wextra -Wpedantic
-```
-
-常见坑：新增 `.cpp` 却没有加入 `CMakeLists.txt`，可能产生 `undefined reference`。
 
 ---
 
-# 4. 命令行参数
+## 18. 构建命令
 
-入口：
+配置：
+
+```bash
+cmake -S . -B build
+```
+
+编译：
+
+```bash
+cmake --build build
+```
+
+重要：
+
+```text
+修改源码后必须重新 cmake --build build
+```
+
+否则：
+
+```text
+./build/minijudge
+```
+
+仍可能运行旧版本。
+
+---
+
+# 命令行参数
+
+## 19. `argc` 与 `argv`
 
 ```cpp
 int main(int argc, char* argv[])
@@ -264,46 +416,50 @@ int main(int argc, char* argv[])
 运行：
 
 ```bash
-./build/minijudge examples/accepted.cpp
+./build/minijudge examples/ac.cpp
 ```
 
 对应：
 
 ```text
-argv[0]  MiniJudge 启动路径
-argv[1]  用户源码路径
+argv[0] = ./build/minijudge
+argv[1] = examples/ac.cpp
 ```
 
-使用前先检查：
+访问 `argv[1]` 前必须先检查：
 
 ```cpp
-if (argc < 2) {
-    std::cerr << "Usage: " << argv[0] << " <source_path>\n";
-    return 1;
-}
+argc >= 2
 ```
-
-常见坑：检查 `argc` 前访问 `argv[1]`。
 
 ---
 
-# 5. `std::filesystem` 与测试点
+# filesystem
 
-## 5.1 路径检查与遍历
+## 20. 路径检查
 
 ```cpp
 std::filesystem::exists(path);
 std::filesystem::is_directory(path);
 ```
 
-遍历：
+区别：
+
+```text
+exists()
+路径存在
+
+is_directory()
+路径是目录
+```
+
+---
+
+## 21. 遍历目录
 
 ```cpp
 for (const auto& entry :
      std::filesystem::directory_iterator(testDir)) {
-    if (!entry.is_regular_file()) {
-        continue;
-    }
 }
 ```
 
@@ -311,253 +467,148 @@ for (const auto& entry :
 
 ---
 
-## 5.2 `path`
+## 22. 文件名操作
 
 ```cpp
-std::filesystem::path path = entry.path();
-
-path.filename().string();
-path.stem().string();
-path.extension().string();
+path.filename()
+path.stem()
+path.extension()
 ```
 
-拼接：
+例如：
 
-```cpp
-std::filesystem::path input =
-    std::filesystem::path(testDir) / (name + ".in");
+```text
+1.in
+
+filename  1.in
+stem      1
+extension .in
 ```
-
-常见坑：相对路径基于程序启动时的当前工作目录，不是可执行文件所在目录。
-
-当前必须从项目根目录运行。
 
 ---
 
-## 5.3 测试点配对
+## 23. 路径拼接
 
-规则：
+推荐：
 
-```text
-<name>.in + <name>.out = 一个测试点
+```cpp
+std::filesystem::path input =
+    std::filesystem::path(testDir) /
+    (name + ".in");
 ```
 
-使用两个集合：
+不要依赖字符串末尾是否有 `/`。
+
+---
+
+# 测试点发现
+
+## 24. 配对规则
+
+同名：
+
+```text
+<name>.in
+<name>.out
+```
+
+组成一个测试点。
+
+例如：
+
+```text
+1.in / 1.out
+2#1.in / 2#1.out
+abc.in / abc.out
+```
+
+测试点名称不要求连续。
+
+---
+
+## 25. `set<string>`
+
+分别保存：
 
 ```cpp
 std::set<std::string> inputNames;
 std::set<std::string> outputNames;
 ```
 
-必须双向检查：
+双向检查 `.in/.out` 是否成对。
+
+注意：
 
 ```text
-.in 是否缺 .out
-.out 是否缺 .in
+set<string> 按字符串字典序排列
+
+1
+10
+2
+abc
 ```
-
-不能仅通过文件数量判断。
-
-当前测试点按 `std::set<std::string>` 的字符串字典序运行。
 
 ---
 
-## 5.4 测试名白名单
+## 26. 测试名白名单
 
 当前允许：
 
 ```text
-A-Z a-z 0-9 _ - # .
+A-Z
+a-z
+0-9
+_
+-
+#
+.
 ```
 
-当前 `Checker` 仍通过 Shell 调用 `diff`，因此继续限制测试名，避免路径中的特殊字符改变命令结构。
-
-`.in`、`.out` 这种空测试名需要单独检查。
+第一版使用 Shell 命令时，白名单比不断补危险字符黑名单更可靠。
 
 ---
 
-# 6. `std::system()` 与 Shell
+# Linux 进程
 
-`std::system()` 让 Shell 执行命令：
-
-```cpp
-std::string cmd = "ls";
-int res = std::system(cmd.c_str());
-```
-
-早期 Runner：
-
-```bash
-./program < test.in > actual.out
-```
-
-Shell 自动完成：
-
-```text
-启动程序
-输入重定向
-输出重定向
-等待程序结束
-```
-
-当前状态：
-
-```text
-Runner    已移除 system()
-Compiler  仍使用 system() 调用 g++
-Checker   仍使用 system() 调用 diff
-```
-
-结论：改用 Linux 进程接口后，原来 Shell 自动做的工作需要 MiniJudge 自己完成。
-
----
-
-# 7. Linux 标准输入输出与文件描述符
-
-默认文件描述符：
-
-```text
-0  stdin
-1  stdout
-2  stderr
-```
-
-`std::cin` 从标准输入读取，`std::cout` 写向标准输出。
-
-Shell：
-
-```bash
-program < input.txt > output.txt
-```
-
-当前 Runner 使用 `open()` + `dup2()` 实现相同效果。
-
----
-
-# 8. `open()`
-
-输入：
-
-```cpp
-int inputFd = open(inputPath.c_str(), O_RDONLY);
-```
-
-成功返回非负文件描述符，失败返回 `-1`。
-
-输出：
-
-```cpp
-int outputFd = open(
-    outputPath.c_str(),
-    O_WRONLY | O_CREAT | O_TRUNC,
-    0644
-);
-```
-
-```text
-O_WRONLY  只写
-O_CREAT   不存在则创建
-O_TRUNC   已存在则清空
-0644      所有者读写，同组和其他用户只读
-```
-
-`0644` 中开头的 `0` 表示八进制：
-
-```text
-r = 4
-w = 2
-x = 1
-```
-
-常见坑：使用 `O_CREAT` 时需要提供创建权限参数。
-
----
-
-# 9. `dup2()`
-
-```cpp
-dup2(oldFd, newFd);
-```
-
-作用：让 `newFd` 指向 `oldFd` 当前指向的对象。
-
-输入重定向：
-
-```cpp
-dup2(inputFd, STDIN_FILENO);
-```
-
-输出重定向：
-
-```cpp
-dup2(outputFd, STDOUT_FILENO);
-```
-
-执行后：
-
-```text
-0 -> inputPath
-1 -> actualOutputPath
-```
-
-之后 `execv()` 启动的用户程序仍然使用自己的 `cin/cout`，但实际连接到测试文件和输出文件。
-
-常见坑：输出必须使用 `STDOUT_FILENO`，不能复制输入重定向代码后忘记修改。
-
----
-
-# 10. `close()` 与 fd 生命周期
-
-原则：
-
-> fd 最后一次使用结束后立即关闭。
-
-例如：
-
-```cpp
-dup2(inputFd, STDIN_FILENO);
-close(inputFd);
-```
-
-`dup2()` 后标准输入已经保留了对文件的引用，原始 `inputFd` 不再需要。
-
-父进程提前 `return` 前，应关闭仍然持有的 fd。
-
-子进程马上 `_exit()` 时，不必为了防泄漏逐个关闭剩余 fd，进程结束时内核会回收。
-
----
-
-# 11. `fork()`
+## 27. `fork()`
 
 ```cpp
 pid_t pid = fork();
 ```
 
-返回：
+返回值：
 
 ```text
-pid < 0   创建失败
-pid == 0  当前执行流是子进程
-pid > 0   当前执行流是父进程，值为子进程 PID
+pid < 0  创建失败
+pid == 0 当前是子进程
+pid > 0  当前是父进程，值为子进程 PID
 ```
 
-`fork()` 后父子进程从下一条语句继续执行。
-
-父子进程拥有独立地址空间。
-
-典型模型：
+基本模型：
 
 ```text
-父进程 fork
-├─ child：准备环境，exec 目标程序
-└─ parent：保留下来监督 child
+父进程
+   │
+ fork
+ ┌─┴─┐
+父   子
 ```
-
-`fork()` 只负责创建子进程；等待、获取状态、通信等由其他接口完成。
 
 ---
 
-# 12. `execv()`
+## 28. `pid_t`
+
+专门表示进程 PID 的类型：
+
+```cpp
+pid_t pid;
+```
+
+系统调用返回 PID 时优先使用 `pid_t`，不要随意写成普通 `int`。
+
+---
+
+## 29. `execv()`
 
 ```cpp
 execv(program.c_str(), argv);
@@ -565,347 +616,933 @@ execv(program.c_str(), argv);
 
 作用：
 
-> 用新的程序替换当前进程正在执行的程序。
+```text
+用新的程序替换当前进程内容
+```
 
-关键结论：
-
-- 不创建新进程
-- PID 不变
-- 成功后不会返回
-- 失败返回 `-1`
-
-当前流程：
+重要：
 
 ```text
-fork
-↓
-子进程 open / dup2
-↓
-execv
-↓
-同一个子进程变成 user_program
+exec 不创建新进程
+fork 才创建新进程
 ```
+
+成功后：
+
+```text
+execv() 不会返回
+```
+
+返回说明执行失败。
 
 ---
 
-# 13. `_exit()`
+## 30. `_exit()`
 
-子进程在 `execv()` 前出现错误时：
+子进程在 `exec()` 前发生内部错误时：
 
 ```cpp
 _exit(1);
 ```
 
-作用：立即结束当前子进程。
+比普通：
 
-在 `run()` 中不能简单 `return`，否则只是从 `run()` 返回，子进程还可能继续执行 MiniJudge 后续逻辑。
-
-注意：
-
-```text
-return / exit / _exit
+```cpp
+exit(1);
 ```
 
-从父进程 `waitpid()` 看，都属于正常退出方式，`WIFEXITED(status)` 为真。
+更适合 `fork()` 后的子进程错误路径，可避免重复刷新继承来的 C/C++ 缓冲区等问题。
 
 ---
 
-# 14. `waitpid()`
+# 文件描述符与重定向
+
+## 31. `open()`
+
+打开输入：
 
 ```cpp
-int status;
-waitpid(childPid, &status, 0);
+open(path, O_RDONLY);
 ```
 
-当前用途：
-
-- 等待指定子进程结束
-- 获取子进程结束状态
-- 回收子进程
-
-正常退出：
+打开输出：
 
 ```cpp
-WIFEXITED(status)
-WEXITSTATUS(status)
+open(
+    path,
+    O_WRONLY | O_CREAT | O_TRUNC,
+    0644
+);
 ```
 
-例如：
+含义：
 
 ```text
-return 0  -> WIFEXITED=true, exitCode=0
-return 1  -> WIFEXITED=true, exitCode=1
-_exit(1)  -> WIFEXITED=true, exitCode=1
+O_WRONLY  只写
+O_CREAT   不存在则创建
+O_TRUNC   已存在则清空
 ```
-
-`waitpid()` 无法仅凭退出码区分：
-
-```text
-MiniJudge 在 execv 前 _exit(1)
-用户程序 return/exit 1
-```
-
-这正是当前 Runner 使用 `pipe()` 的原因。
 
 ---
 
-# 15. Signal 与 RE
-
-Signal 是 Linux 向进程通知事件的一种机制。
-
-例如非法内存访问：
-
-```text
-用户程序访问非法地址
-↓
-内核产生 SIGSEGV
-↓
-默认动作终止进程
-↓
-父进程 waitpid 得到信号终止状态
-```
-
-判断：
+## 32. `dup2()`
 
 ```cpp
-WIFSIGNALED(status)
-WTERMSIG(status)
+dup2(inputFd, STDIN_FILENO);
 ```
 
-Linux 上常见的 `SIGSEGV` 信号编号为 11。
-
-当前判定：
+让：
 
 ```text
-WIFSIGNALED                 -> RE
-WIFEXITED && exitCode != 0  -> RE
-WIFEXITED && exitCode == 0  -> OK
+stdin
 ```
 
-常见坑：不要把 `WIFEXITED` 理解成“退出码为 0”；它只表示进程通过正常退出路径结束。
+指向输入文件。
+
+输出：
+
+```cpp
+dup2(outputFd, STDOUT_FILENO);
+```
+
+等价于 Shell 的：
+
+```bash
+< input
+> output
+```
 
 ---
 
-# 16. `pipe()`：父子进程通信
+## 33. `close()`
 
-创建：
+完成 `dup2()` 后：
+
+```cpp
+close(inputFd);
+close(outputFd);
+```
+
+原因：
+
+新的标准输入/输出文件描述符已经建立，原来的 fd 不再需要。
+
+---
+
+# pipe
+
+## 34. `pipe()`
 
 ```cpp
 int pipeFd[2];
 pipe(pipeFd);
 ```
 
-```text
-pipeFd[0]  读端
-pipeFd[1]  写端
-```
-
-必须在 `fork()` 前创建，使父子进程都继承这组 fd。
-
-当前方向：
+含义：
 
 ```text
-子进程 --错误标记--> 父进程
+pipeFd[0] 读端
+pipeFd[1] 写端
 ```
 
-子进程在 `open / dup2 / execv` 失败时：
+当前 Runner 用于：
+
+```text
+子进程
+→ 报告 exec / open / dup2 等 MiniJudge 内部错误
+→ 父进程
+```
+
+---
+
+## 35. 父子关闭无用端
+
+子进程：
 
 ```cpp
-char errorFlag = 1;
-write(pipeFd[1], &errorFlag, sizeof(errorFlag));
-_exit(1);
+close(pipeFd[0]);
 ```
 
 父进程：
 
 ```cpp
-char errorFlag;
-ssize_t byteRead =
-    read(pipeFd[0], &errorFlag, sizeof(errorFlag));
+close(pipeFd[1]);
 ```
 
-返回：
+否则可能导致：
 
 ```text
-byteRead > 0   收到错误标记
-byteRead == 0  没有数据且写端已关闭
-byteRead == -1 read 失败
-```
-
-普通变量不能跨 `fork()` 把子进程修改传回父进程，pipe 可以。
-
----
-
-# 17. Runner 当前结果分类
-
-当前 `RunResult.status`：
-
-```text
-0  OK
-1  RE
-2  Run failed
-```
-
-判断逻辑：
-
-```text
-pipe / fork / waitpid / read 自身失败
-→ Run failed
-
-pipe 收到子进程启动错误标记
-→ Run failed
-
-pipe 无启动错误 + WIFSIGNALED
-→ RE
-
-pipe 无启动错误 + WIFEXITED + exitCode != 0
-→ RE
-
-pipe 无启动错误 + WIFEXITED + exitCode == 0
-→ OK
-```
-
-只有 `OK` 才进入 `Checker`：
-
-```text
-compare 相同 -> AC
-compare 不同 -> WA
+read 一直等不到 EOF
 ```
 
 ---
 
-# 18. `perror()` 与 `std::cerr`
+# waitpid
 
-`std::cerr`：
-
-```cpp
-std::cerr << "Missing source path\n";
-```
-
-用于输出自己定义的错误信息。
-
-`perror()`：
+## 36. 普通 `waitpid()`
 
 ```cpp
-std::perror("execv");
+waitpid(pid, &status, 0);
 ```
 
-会根据当前 `errno` 自动补充系统错误原因。
+父进程会等待子进程状态变化。
 
-结论：
+返回后通过 `status` 分析结束原因。
+
+---
+
+## 37. `WNOHANG`
+
+```cpp
+waitpid(pid, &status, WNOHANG);
+```
+
+非阻塞检查。
+
+返回值：
 
 ```text
-系统调用刚失败 -> perror
-业务/逻辑错误  -> cerr
+> 0 子进程已结束并被回收
+0   子进程尚未结束
+-1  waitpid 出错
 ```
 
-常见坑：系统调用失败后应尽快调用 `perror()`，中间其他调用可能改变 `errno`。
+TLE 需要 `WNOHANG`，否则父进程会一直阻塞，没有机会检查时间。
 
 ---
 
-# 19. Linux 系统接口头文件
+# Zombie
 
-当前常用：
+## 38. 僵尸进程
 
-```cpp
-#include <unistd.h>    // fork, execv, dup2, close, pipe, read, write, _exit
-#include <sys/wait.h>  // waitpid, WIFEXITED, WEXITSTATUS, WIFSIGNALED
-#include <fcntl.h>     // open, O_RDONLY, O_WRONLY...
-#include <cstdio>      // perror
-```
-
-不必死记所有头文件；忘记时查：
-
-```bash
-man 2 fork
-man 2 waitpid
-man 3 execv
-```
-
-原则：使用哪个接口，就直接包含声明该接口的头文件，不依赖间接包含。
-
----
-
-# 20. 运行时间统计
-
-使用：
-
-```cpp
-std::chrono::steady_clock
-```
-
-适合测量时间间隔，不受系统日期时间调整影响。
-
-当前内部保存微秒：
-
-```cpp
-std::chrono::duration_cast<std::chrono::microseconds>(
-    std::chrono::steady_clock::now() - start
-).count();
-```
-
-输出：
-
-```cpp
-std::cout << std::fixed << std::setprecision(3);
-std::cout << elapsedMicroseconds / 1000.0 << " ms";
-```
-
-当前测量的是墙上时间，包含进程创建、文件重定向、程序执行、调度与等待等开销。
-
-不要通过“空跑一次再减基线”修正时间，因为调度、缓存等开销并不固定。
-
----
-
-# 21. Ubuntu Apport 与信号型 RE 计时
-
-当前 Ubuntu 的 `core_pattern` 使用 Apport crash handler。
-
-用户程序 `SIGSEGV` 后，Ubuntu 可能额外启动崩溃收集流程，导致：
+子进程结束后：
 
 ```text
-用户程序实际很快崩溃
-但 waitpid 数秒后才返回
+程序已经不运行
+CPU 不再执行它
 ```
 
-因此部分 RE 的墙上时间可能明显偏大。
+但内核会暂时保留：
 
-结论：
+```text
+PID
+退出状态
+终止信号
+资源统计等
+```
 
-- RE 判定本身仍然正确
-- 不应让 MiniJudge 擅自修改系统全局 `core_pattern`
-- 设计 TLE 时不能单纯以最终墙上时间超过阈值就直接判 TLE
+等待父进程：
+
+```cpp
+waitpid()
+```
+
+回收。
+
+记忆：
+
+```text
+kill    让进程终止
+waitpid 回收终止后的进程记录
+```
 
 ---
 
-# 22. `diff` 与 Checker
+# 子进程退出状态
+
+## 39. 正常退出
+
+```cpp
+if (WIFEXITED(status)) {
+    int exitCode = WEXITSTATUS(status);
+}
+```
+
+例如：
+
+```cpp
+return 7;
+```
+
+得到：
+
+```text
+WIFEXITED == true
+WEXITSTATUS == 7
+```
+
+---
+
+## 40. 信号终止
+
+```cpp
+if (WIFSIGNALED(status)) {
+    int sig = WTERMSIG(status);
+}
+```
+
+例如：
+
+```text
+SIGSEGV
+SIGTERM
+SIGKILL
+SIGFPE
+```
+
+注意：
+
+信号终止时不能使用：
+
+```cpp
+WEXITSTATUS()
+```
+
+---
+
+# Signal
+
+## 41. SIGTERM
+
+含义：
+
+```text
+Termination Signal
+```
+
+默认：
+
+```text
+请求进程终止
+```
+
+可以被捕获和处理。
+
+---
+
+## 42. SIGSEGV
+
+含义：
+
+```text
+Segmentation Violation
+```
+
+常见原因：
+
+```text
+空指针
+野指针
+非法内存访问
+严重越界
+use-after-free
+```
+
+默认行为：
+
+```text
+终止进程 + core dump
+```
+
+即常见：
+
+```text
+Segmentation fault
+```
+
+---
+
+## 43. SIGKILL
+
+强制终止进程：
+
+```cpp
+kill(pid, SIGKILL);
+```
+
+特点：
+
+```text
+不能捕获
+不能忽略
+不能处理
+```
+
+MiniJudge 超时后使用 SIGKILL 强制结束用户程序。
+
+---
+
+## 44. SIGFPE
+
+常见于：
+
+```text
+整数除 0
+非法算术操作
+```
+
+默认可能：
+
+```text
+终止 + core dump
+```
+
+MiniJudge 判为 RE。
+
+---
+
+# 运行时间
+
+## 45. `steady_clock`
+
+```cpp
+auto start =
+    std::chrono::steady_clock::now();
+```
+
+适合测量时间间隔。
+
+当前使用：
+
+```cpp
+std::chrono::duration_cast<
+    std::chrono::microseconds
+>(now - start).count();
+```
+
+---
+
+## 46. `timeUs`
+
+命名：
+
+```text
+Us = microseconds = 微秒
+Ms = milliseconds = 毫秒
+```
+
+关系：
+
+```text
+1 s
+= 1000 ms
+= 1,000,000 us
+```
+
+例如：
+
+```cpp
+timeUs / 1000.0
+```
+
+转换为毫秒。
+
+---
+
+## 47. Wall Time
+
+当前 MiniJudge 使用的是 wall time：
+
+```text
+现实世界从开始到结束经过的时间
+```
+
+包括：
+
+```text
+真正占用 CPU
+等待调度
+等待 I/O
+虚拟机未获得 CPU 的时间
+```
+
+因此会受到：
+
+```text
+系统负载
+CPU 降频
+虚拟机调度
+```
+
+影响。
+
+后续可考虑 CPU time 与 wall time 分开限制。
+
+---
+
+# TLE
+
+## 48. TLE 基本流程
+
+```text
+waitpid(WNOHANG)
+↓
+仍在运行
+↓
+检查 elapsed time
+↓
+超过限制
+↓
+SIGKILL
+↓
+waitpid 回收
+↓
+TLE
+```
 
 当前：
 
-```bash
-diff -wB actual.out expected.out
+```text
+time limit = 1000 ms
 ```
 
+---
+
+## 49. `usleep()`
+
+```cpp
+usleep(1000);
+```
+
+单位：
+
 ```text
--w  忽略空白字符差异
--B  忽略空白行
+微秒
+```
+
+即：
+
+```text
+1000 us = 1 ms
+```
+
+作用：
+
+避免：
+
+```text
+waitpid
+检查时间
+waitpid
+检查时间
+...
+```
+
+形成 busy waiting。
+
+注意：
+
+```text
+usleep(1000)
+```
+
+不保证精确 1ms 后重新运行。
+
+---
+
+## 50. Busy Waiting
+
+错误形式：
+
+```cpp
+while (true) {
+    waitpid(pid, &status, WNOHANG);
+}
+```
+
+会不断占用 CPU。
+
+当前使用短暂：
+
+```cpp
+usleep(1000);
+```
+
+降低轮询开销。
+
+---
+
+# RE 与 TLE
+
+## 51. Runner 状态
+
+```cpp
+enum class RunStatus {
+    Ok,
+    RuntimeError,
+    TimeLimitExceeded,
+    InternalError
+};
 ```
 
 返回：
 
-```text
-0   相同
-1   不同
->1  diff 自身执行错误
+```cpp
+struct RunResult {
+    RunStatus status;
+    long long timeUs;
+};
 ```
 
-当前 `Checker` 仍通过 `std::system()` 调用 `diff`。
+使用 enum class 避免：
+
+```text
+0 / 1 / 2 / 3
+```
+
+等魔法数字。
 
 ---
 
-# 23. Git
+## 52. InternalError
 
-基本流程：
+表示：
+
+```text
+MiniJudge 自身运行错误
+```
+
+例如：
+
+```text
+pipe 失败
+fork 失败
+waitpid 失败
+read 失败
+子进程 open / dup2 / exec 失败
+```
+
+区别：
+
+```text
+用户程序错误 → RE
+MiniJudge 自己出错 → InternalError
+```
+
+---
+
+## 53. TLE 不等于 SIGKILL
+
+错误结论：
+
+```text
+WTERMSIG == SIGKILL
+→ TLE
+```
+
+因为用户程序也可能：
+
+```cpp
+kill(getpid(), SIGKILL);
+```
+
+这种情况应该是：
+
+```text
+RE
+```
+
+正确概念：
+
+```text
+MiniJudge 因超时主动发送 SIGKILL
++
+最终确认子进程因此终止
+→ TLE
+```
+
+---
+
+# Core Dump
+
+## 54. Core Dump
+
+程序发生严重异常时，Linux 可以保存进程崩溃时的信息，用于调试。
+
+常见触发：
+
+```text
+SIGSEGV
+SIGFPE
+```
+
+Ubuntu 可能由：
+
+```text
+Apport
+```
+
+处理 core dump。
+
+---
+
+## 55. `core_pattern`
+
+查看：
+
+```bash
+cat /proc/sys/kernel/core_pattern
+```
+
+当前环境类似：
+
+```text
+|/usr/share/apport/apport ...
+```
+
+开头：
+
+```text
+|
+```
+
+表示：
+
+```text
+core dump 被管道交给用户态程序处理
+```
+
+---
+
+## 56. `ulimit -c`
+
+查看：
+
+```bash
+ulimit -c
+```
+
+虽然可能显示：
+
+```text
+0
+```
+
+但在 `core_pattern` 使用管道处理程序时，不能简单认为 Apport 就不会被触发。
+
+---
+
+## 57. Core Dump 导致 RE/TLE 误判
+
+实际现象：
+
+```text
+用户程序几毫秒时发生 SIGSEGV
+↓
+Apport 开始处理 core dump
+↓
+waitpid(WNOHANG) 长时间返回 0
+↓
+wall time 超过 1000ms
+↓
+MiniJudge 误以为仍在正常运行
+↓
+错误判 TLE
+```
+
+---
+
+## 58. `/proc/<pid>/status`
+
+Linux 可以通过：
+
+```text
+/proc/<pid>/status
+```
+
+查看进程状态。
+
+例如：
+
+```text
+/proc/1234/status
+```
+
+其中：
+
+```text
+CoreDumping: 1
+```
+
+表示进程正在进行 core dump。
+
+---
+
+## 59. `isCoreDumping()`
+
+当前思路：
+
+```text
+打开 /proc/<pid>/status
+↓
+逐行 getline
+↓
+寻找 CoreDumping:
+↓
+读取字段值
+↓
+1 → 正在 core dump
+0 → 未在 core dump
+```
+
+读取文件：
+
+```cpp
+std::ifstream file(path);
+
+while (std::getline(file, line)) {
+}
+```
+
+注意：
+
+```cpp
+getline(file, line)
+```
+
+表示：
+
+```text
+从文件读取一行到 line
+```
+
+不是“在文件中寻找 line”。
+
+---
+
+## 60. CoreDumping 的竞态条件
+
+以下操作不是原子的：
+
+```text
+waitpid(WNOHANG)
+↓
+读取 /proc/<pid>/status
+↓
+kill(SIGKILL)
+```
+
+中间进程状态可能发生变化。
+
+例如：
+
+```text
+waitpid 返回 0
+CoreDumping 从 1 变成 0
+MiniJudge 发出 SIGKILL
+waitpid 最终却拿到 SIGSEGV
+```
+
+因此：
+
+```text
+一次 CoreDumping 状态
+不能作为最终 verdict 的唯一依据
+```
+
+最终仍需检查：
+
+```cpp
+WIFSIGNALED(status)
+WTERMSIG(status)
+```
+
+---
+
+# 测试
+
+## 61. 稳定 TLE 测试
+
+不要使用：
+
+```text
+“大概需要 1 秒”的计算程序
+```
+
+作为 TLE 回归测试。
+
+原因：
+
+```text
+机器性能
+CPU 频率
+调度
+优化级别
+```
+
+都会改变运行时间。
+
+稳定测试：
+
+```cpp
+int main() {
+    while (true) {}
+}
+```
+
+结果必须：
+
+```text
+TLE
+```
+
+---
+
+## 62. RE 回归测试
+
+至少覆盖：
+
+```text
+非零 return
+SIGTERM
+SIGKILL
+SIGSEGV
+SIGFPE / divide by zero
+```
+
+预期均为：
+
+```text
+RE
+```
+
+其中：
+
+```text
+SIGSEGV / SIGFPE
+```
+
+可能因为 core dump 明显变慢。
+
+---
+
+## 63. 当前完整回归集合
+
+至少检查：
+
+```text
+AC
+WA
+CE
+RE
+TLE
+```
+
+修改 Runner 后不能只测试新加入的 TLE。
+
+原因：
+
+```text
+Runner 是评测核心路径
+```
+
+需要确认旧功能没有被破坏。
+
+---
+
+# Git
+
+## 64. 基本流程
 
 ```text
 工作区
@@ -917,101 +1554,268 @@ diff -wB actual.out expected.out
 远程仓库
 ```
 
-常用：
+---
 
-```bash
-git status
-git diff
-git log --oneline
-git add <files>
-git commit -m "type: description"
-git push
-```
+## 65. Commit Message
 
-常见提交类型：
+格式：
 
 ```text
-feat      新功能
-fix       修复
-docs      文档
-refactor  重构
+type: description
 ```
 
-修改最近一次尚未推送的提交：
+例如：
 
 ```bash
+git commit -m "feat: implement TLE detection"
+```
+
+修复：
+
+```bash
+git commit -m \
+"fix: distinguish RE from TLE during core dumps"
+```
+
+---
+
+## 66. 修改最近提交
+
+尚未 push 时：
+
+```bash
+git add .
 git commit --amend --no-edit
 ```
 
-撤回最近提交但保留代码：
+---
+
+## 67. 撤回提交但保留修改
 
 ```bash
 git reset --soft HEAD~1
 ```
 
-常见坑：不要随意对已经 push 的提交重写历史。
+不要随意：
+
+```bash
+git reset --hard
+```
 
 ---
 
-# 24. VS Code Remote Git 凭证通道
+# Linux 开发环境
 
-Remote-SSH 终端可能保存：
+## 68. `ENOSPC`
 
-```text
-VSCODE_GIT_IPC_HANDLE
-```
-
-如果 VS Code Git 后台重启，旧终端可能仍指向旧 socket，导致：
+错误：
 
 ```text
-ECONNREFUSED ... vscode-git-xxxx.sock
+ENOSPC: no space left on device
 ```
 
-新建终端后会继承新的环境变量。
+表示：
 
-结论：出现这类错误时先确认 socket 是否过期，不要直接重配 `user.name` / `user.email`。
+```text
+文件系统空间不足
+```
+
+检查：
+
+```bash
+df -h
+```
+
+查目录占用：
+
+```bash
+du -h --max-depth=1 ~ | sort -h
+```
+
+常见缓存目录：
+
+```text
+~/.cache
+~/.vscode-server
+```
 
 ---
 
-# 25. 当前状态
+# 工程设计结论
+
+## 69. 不要过早抽象
+
+只有状态需要：
+
+```text
+保存
+传递
+统一判断
+```
+
+时才引入额外类型。
+
+Runner 最初只有成功/失败时不需要 enum。
+
+加入：
+
+```text
+OK
+RE
+TLE
+InternalError
+```
+
+后：
+
+```cpp
+enum class RunStatus
+```
+
+开始具有实际价值。
+
+---
+
+## 70. 最终状态比中间动作更重要
+
+错误思路：
+
+```text
+我调用了 kill(SIGKILL)
+→ 一定 TLE
+```
+
+正确思路：
+
+```text
+我为什么发送 signal
++
+waitpid 最终观察到什么
+→ 决定 verdict
+```
+
+系统编程中：
+
+```text
+状态可能在两个系统调用之间变化
+```
+
+不能只依赖一次状态快照。
+
+---
+
+# MiniJudge 当前状态
 
 ## 已完成
 
-- 基础编译、运行、答案比较
-- AC / WA / CE
-- CMake 构建
-- 命令行源码参数
-- 自动扫描并校验测试数据
-- 字符串测试点名称
-- 每个测试点运行时间统计
-- Runner 从 `std::system()` 替换为 Linux 进程接口
-- `fork + open + dup2 + execv + waitpid`
-- pipe 父子进程通信
-- 区分 `RE` 与 `Run failed`
-- 信号终止和非零退出的 RE 判断
-
-## 尚未完成
-
-- TLE 与超时进程终止
-- `Compiler` 去除 `std::system()`
-- `Checker` 去除 `std::system()`
-- 内存和其他资源限制
-- 修复必须从项目根目录运行的问题
-- 结构化评测报告
-
-## 当前唯一下一步
-
-学习并验证：
-
 ```text
-waitpid(..., WNOHANG)
+源码编译
+CE
+
+自动扫描测试点
+.in / .out 配对校验
+
+批量运行
+
+CMake
+
+命令行源码参数
+
+fork
+
+execv
+
+dup2
+
+pipe
+
+waitpid
+
+WNOHANG
+
+运行时间统计
+
+AC
+
+WA
+
+RE
+
+TLE
+
+Core Dump 导致的 RE/TLE 误判处理
+
+RunStatus enum
+
+完整基础回归测试
 ```
 
-目标：为 TLE 的非阻塞等待和超时控制建立运行模型。
+当前评测流程：
 
-## 明确暂缓
+```text
+source.cpp
+↓
+Compiler
+↓
+user_program
+↓
+Runner
+├─ fork
+├─ dup2
+├─ execv
+├─ waitpid(WNOHANG)
+├─ RE
+├─ TLE
+└─ timeUs
+↓
+Checker
+↓
+AC / WA
+```
 
-- Compiler / Checker 重构
-- 内存限制
-- 并行评测
-- 复杂报告格式
+---
+
+# 当前限制
+
+```text
+时间限制固定为 1000ms
+
+使用 wall time
+受机器负载和虚拟机调度影响
+
+SIGSEGV / SIGFPE 的 core dump
+可能导致 RE 返回较慢
+
+Compiler 仍依赖外部 g++ 命令
+
+Checker 仍依赖 diff
+
+必须从项目根目录运行
+
+尚未限制 CPU time
+
+尚未限制内存
+
+尚未限制其他资源
+```
+
+---
+
+# 当前唯一下一步
+
+```text
+整理并收敛当前 Runner，
+再决定 MiniJudge 可投版本还必须补哪一个最小功能。
+```
+
+暂缓：
+
+```text
+线程池
+并行评测
+Docker 沙箱
+Web 页面
+数据库
+分布式评测
+复杂设计模式
+```

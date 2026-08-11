@@ -14,3 +14,5 @@ struct RunResult{
 };
 
 RunResult run(const std::string& exePath, const std::string& inputPath, const std::string& actualOutputPath);
+
+bool isCoreDumping(pid_t pid);

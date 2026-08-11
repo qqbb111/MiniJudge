@@ -7,6 +7,22 @@
 #include <fcntl.h> // open, O_RDONLY...
 #include <cstdio> // perror
 #include <signal.h> // SIGKILL
+#include <fstream> // ifstream
+
+bool isCoreDumping(pid_t pid){
+    std::string path = "/proc/" + std::to_string(pid) + "/status";
+    std::ifstream file(path);
+    std::string line;
+
+    while(std::getline(file, line)){
+        if(line.find("CoreDumping:") != std::string::npos){
+            size_t pos = line.find(':');
+            int val = std::stoi(line.substr(pos + 1));
+            return val == 1;
+        }
+    }
+    return false;
+}
 
 RunResult run(const std::string& exePath, const std::string& inputPath, const std::string& actualOutputPath){
     auto start = std::chrono::steady_clock::now();
@@ -79,10 +95,10 @@ RunResult run(const std::string& exePath, const std::string& inputPath, const st
             break;
         }
         long long elapsedUs = getElapsedUs();
-        if(elapsedUs > 1000 * 1000){
+        if(elapsedUs > 1000 * 1000 && !isCoreDumping(pid)){
             kill(pid, SIGKILL);
-            waitpid(pid, &sta, 0); // 回收被杀死的子进程，防止僵尸进程，读取signal终止状态信息
             timeOut = true;
+            waitpid(pid, &sta, 0); // 回收被杀死的子进程，防止僵尸进程，读取signal终止状态信息
             break;
         }
         usleep(1000);
@@ -102,11 +118,10 @@ RunResult run(const std::string& exePath, const std::string& inputPath, const st
         return {RunStatus::InternalError, getElapsedUs()};
     }
     
-    if(timeOut){
-        return {RunStatus::TimeLimitExceeded, getElapsedUs()};
-    } 
-    
     if(WIFSIGNALED(sta)){ // 用户程序因信号停止，判 RE / TLE
+        int sig = WTERMSIG(sta);
+        if(timeOut && sig == SIGKILL) return {RunStatus::TimeLimitExceeded, getElapsedUs()};
+
         return {RunStatus::RuntimeError, getElapsedUs()};
     }
 
