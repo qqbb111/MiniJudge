@@ -24,7 +24,7 @@ bool isCoreDumping(pid_t pid){
     return false;
 }
 
-RunResult run(const std::string& exePath, const std::string& inputPath, const std::string& actualOutputPath){
+RunResult run(const std::string& exePath, const std::string& inputPath, const std::string& actualOutputPath, long long timeLimitMs){
     auto start = std::chrono::steady_clock::now();
     auto getElapsedUs = [&start](){
         return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
@@ -95,7 +95,7 @@ RunResult run(const std::string& exePath, const std::string& inputPath, const st
             break;
         }
         long long elapsedUs = getElapsedUs();
-        if(elapsedUs > 1000 * 1000 && !isCoreDumping(pid)){
+        if(elapsedUs > timeLimitMs * 1000 && !isCoreDumping(pid)){
             kill(pid, SIGKILL);
             timeOut = true;
             waitpid(pid, &sta, 0); // 回收被杀死的子进程，防止僵尸进程，读取signal终止状态信息

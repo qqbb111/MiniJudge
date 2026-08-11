@@ -413,6 +413,8 @@ cmake --build build
 int main(int argc, char* argv[])
 ```
 
+`argv` 中的命令行参数本质上都是字符串。
+
 运行：
 
 ```bash
@@ -426,10 +428,298 @@ argv[0] = ./build/minijudge
 argv[1] = examples/ac.cpp
 ```
 
-访问 `argv[1]` 前必须先检查：
+位置参数不能再简单假设固定在 `argv[1]`，使用 `getopt_long()` 后应通过 `optind` 获取。
+
+---
+
+## 19.1 `getopt_long()`
+
+需要：
 
 ```cpp
-argc >= 2
+#include <getopt.h>
+```
+
+作用：
+
+```text
+每次解析一个命令行 option
+没有更多 option 时返回 -1
+```
+
+基本模型：
+
+```cpp
+while ((opt = getopt_long(
+    argc,
+    argv,
+    shortOptions,
+    longOptions,
+    nullptr
+)) != -1) {
+    switch (opt) {
+    }
+}
+```
+
+---
+
+## 19.2 短选项
+
+例如：
+
+```cpp
+const char* shortOptions = "t:h";
+```
+
+含义：
+
+```text
+t:  -t 必须携带参数
+h   -h 不携带参数
+```
+
+示例：
+
+```bash
+-t 2000
+-h
+```
+
+短选项只有一个字符，通常只给常用选项设置。
+
+---
+
+## 19.3 长选项
+
+```cpp
+static option longOptions[] = {
+    {"time-limit", required_argument, nullptr, 't'},
+    {"help", no_argument, nullptr, 'h'},
+    {nullptr, 0, nullptr, 0}
+};
+```
+
+含义：
+
+```text
+required_argument  必须携带参数
+no_argument        不携带参数
+```
+
+最后：
+
+```cpp
+{nullptr, 0, nullptr, 0}
+```
+
+是数组结束标记。
+
+有对应短选项时：
+
+```text
+-t
+--time-limit
+```
+
+可以统一返回：
+
+```cpp
+'t'
+```
+
+只有长选项时，也可以自己指定整数常量：
+
+```cpp
+enum {
+    OPT_FOO = 1000
+};
+```
+
+然后：
+
+```cpp
+{"foo", no_argument, nullptr, OPT_FOO}
+```
+
+处理：
+
+```cpp
+case OPT_FOO:
+```
+
+`switch case` 不要求是字符，只要求是编译期整数常量。
+
+---
+
+## 19.4 `optarg`
+
+`optarg` 由 `<getopt.h>` 声明。
+
+解析：
+
+```bash
+-t 2000
+```
+
+时：
+
+```text
+opt == 't'
+optarg -> "2000"
+```
+
+可转为：
+
+```cpp
+std::string timeText = optarg;
+```
+
+---
+
+## 19.5 `optind`
+
+`optind` 指向解析完成后第一个剩余位置参数。
+
+GNU `getopt_long()` 默认允许：
+
+```bash
+./minijudge -t 2000 a.cpp
+./minijudge a.cpp -t 2000
+```
+
+并可能重排 `argv`，把 option 与位置参数整理开。
+
+重排不是随机的，同类参数的相对顺序会保留。
+
+解析结束后：
+
+```text
+argv[optind]
+```
+
+是第一个位置参数。
+
+当前 MiniJudge 只允许一个源码路径，因此检查：
+
+```cpp
+if (argc - optind != 1) {
+    // 参数数量错误
+}
+```
+
+---
+
+## 19.6 `std::from_chars()`
+
+需要：
+
+```cpp
+#include <charconv>
+```
+
+作用：
+
+```text
+字符串 → 数字
+```
+
+不抛异常，通过返回结果报告解析状态。
+
+示例：
+
+```cpp
+auto result = std::from_chars(
+    text.data(),
+    text.data() + text.size(),
+    value
+);
+```
+
+检查：
+
+```cpp
+result.ec
+```
+
+判断解析是否失败。
+
+检查：
+
+```cpp
+result.ptr == text.data() + text.size()
+```
+
+确认整个字符串都被消费，避免：
+
+```text
+2000abc
+```
+
+只解析出前面的 `2000`。
+
+当前时间限制还需额外满足：
+
+```cpp
+timeLimitMs > 0
+```
+
+---
+
+## 19.7 `getopt_long()` 默认错误输出
+
+GNU `getopt_long()` 默认会自行输出：
+
+```text
+未知选项
+缺少 option 参数
+```
+
+因此当前：
+
+```cpp
+default:
+    return 1;
+```
+
+即可，避免重复输出错误。
+
+---
+
+## 19.8 当前 MiniJudge CLI
+
+格式：
+
+```text
+minijudge [options] <source_path>
+```
+
+默认：
+
+```text
+time limit = 1000 ms
+```
+
+支持：
+
+```bash
+-t 2000
+--time-limit 2000
+```
+
+帮助：
+
+```bash
+-h
+--help
+```
+
+`-h / --help`：
+
+```text
+打印帮助
+立即退出
+返回 0
 ```
 
 ---
@@ -1090,10 +1380,11 @@ waitpid 回收
 TLE
 ```
 
-当前：
+时间限制：
 
 ```text
-time limit = 1000 ms
+默认 1000 ms
+可通过 -t / --time-limit 自定义
 ```
 
 ---
@@ -1333,7 +1624,7 @@ Apport 开始处理 core dump
 ↓
 waitpid(WNOHANG) 长时间返回 0
 ↓
-wall time 超过 1000ms
+wall time 超过限制
 ↓
 MiniJudge 误以为仍在正常运行
 ↓
@@ -1424,15 +1715,6 @@ kill(SIGKILL)
 
 中间进程状态可能发生变化。
 
-例如：
-
-```text
-waitpid 返回 0
-CoreDumping 从 1 变成 0
-MiniJudge 发出 SIGKILL
-waitpid 最终却拿到 SIGSEGV
-```
-
 因此：
 
 ```text
@@ -1460,17 +1742,6 @@ WTERMSIG(status)
 ```
 
 作为 TLE 回归测试。
-
-原因：
-
-```text
-机器性能
-CPU 频率
-调度
-优化级别
-```
-
-都会改变运行时间。
 
 稳定测试：
 
@@ -1528,15 +1799,7 @@ RE
 TLE
 ```
 
-修改 Runner 后不能只测试新加入的 TLE。
-
-原因：
-
-```text
-Runner 是评测核心路径
-```
-
-需要确认旧功能没有被破坏。
+修改 Runner 后不能只测试新加入的功能。
 
 ---
 
@@ -1581,12 +1844,32 @@ git commit -m \
 
 ## 66. 修改最近提交
 
-尚未 push 时：
-
 ```bash
 git add .
 git commit --amend --no-edit
 ```
+
+`amend` 会重新创建最近一次 commit，因此：
+
+```text
+commit hash 会改变
+```
+
+如果该提交已经 push 到远程，再 amend 后普通 `git push` 会因为历史分叉被拒绝。
+
+确认需要用本地 amend 后的提交替换远程时：
+
+```bash
+git push --force-with-lease
+```
+
+优先使用：
+
+```text
+--force-with-lease
+```
+
+而不是普通 `--force`。
 
 ---
 
@@ -1604,9 +1887,66 @@ git reset --hard
 
 ---
 
+## 67.1 Git 分支
+
+`main` 通常保存稳定版本。
+
+单人、小步开发时不必为了“工程化”强行多分支。
+
+适合新建 feature 分支的情况：
+
+```text
+改动较大
+需要多个 commit
+中途可能破坏稳定版本
+方案可能最终被放弃
+```
+
+例如：
+
+```bash
+git switch -c feature/compiler-process
+```
+
+功能完成并验证后再合并回 `main`。
+
+---
+
+# Linux 文档
+
+## 68. `man` 章节
+
+常见章节：
+
+```text
+1  可执行命令
+2  系统调用
+3  库函数
+5  文件格式
+7  杂项 / 协议 / 约定
+```
+
+例如：
+
+```bash
+man 2 fork
+man 3 execv
+```
+
+文档中：
+
+```text
+fork(2)
+printf(3)
+```
+
+括号中的数字也是 man page 章节号。
+
+---
+
 # Linux 开发环境
 
-## 68. `ENOSPC`
+## 69. `ENOSPC`
 
 错误：
 
@@ -1643,7 +1983,7 @@ du -h --max-depth=1 ~ | sort -h
 
 # 工程设计结论
 
-## 69. 不要过早抽象
+## 70. 不要过早抽象
 
 只有状态需要：
 
@@ -1676,7 +2016,7 @@ enum class RunStatus
 
 ---
 
-## 70. 最终状态比中间动作更重要
+## 71. 最终状态比中间动作更重要
 
 错误思路：
 
@@ -1719,7 +2059,10 @@ CE
 
 CMake
 
-命令行源码参数
+CLI 参数解析
+默认 1000ms 时间限制
+-t / --time-limit 自定义时间限制
+-h / --help
 
 fork
 
@@ -1753,7 +2096,9 @@ RunStatus enum
 当前评测流程：
 
 ```text
-source.cpp
+CLI
+├─ source_path
+└─ time limit
 ↓
 Compiler
 ↓
@@ -1778,8 +2123,6 @@ AC / WA
 # 当前限制
 
 ```text
-时间限制固定为 1000ms
-
 使用 wall time
 受机器负载和虚拟机调度影响
 
@@ -1804,8 +2147,9 @@ Checker 仍依赖 diff
 # 当前唯一下一步
 
 ```text
-整理并收敛当前 Runner，
-再决定 MiniJudge 可投版本还必须补哪一个最小功能。
+完成当前版本收尾，
+判断 MiniJudge 是否达到阶段性可投版本，
+再切换到 Linux Socket / 网络编程。
 ```
 
 暂缓：

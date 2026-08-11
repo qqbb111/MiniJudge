@@ -13,6 +13,6 @@ struct RunResult{
     long long timeUs;
 };
 
-RunResult run(const std::string& exePath, const std::string& inputPath, const std::string& actualOutputPath);
+RunResult run(const std::string& exePath, const std::string& inputPath, const std::string& actualOutputPath, long long timeLimitMs);
 
 bool isCoreDumping(pid_t pid);

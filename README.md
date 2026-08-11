@@ -9,6 +9,8 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 ## 当前功能
 
 * 通过命令行指定待评测的 C++ 源码
+* 支持通过 `-t` / `--time-limit` 自定义时间限制，默认 `1000 ms`
+* 支持 `-h` / `--help` 查看命令行帮助
 * 使用 `g++` 编译源码
 * 将编译错误保存到 `tmp/compile.log`
 * 自动扫描并校验 `tests/` 目录中的测试数据
@@ -67,7 +69,7 @@ MiniJudge/
 * `Runner`：创建评测进程、重定向输入输出、统计运行时间并判断运行状态
 * `Checker`：比较实际输出与标准答案
 * `TestCasesFinder`：发现并校验测试数据
-* `main.cpp`：组织完整评测流程
+* `main.cpp`：解析命令行参数并组织完整评测流程
 
 `build/` 和 `tmp/` 中生成的临时文件不会提交到 Git 仓库。
 
@@ -110,23 +112,54 @@ cmake --build build
 
 ## 运行项目
 
-在项目根目录执行：
+命令格式：
 
 ```bash
-./build/minijudge <source_path>
+./build/minijudge [options] <source_path>
 ```
 
-例如：
+使用默认 `1000 ms` 时间限制：
 
 ```bash
 ./build/minijudge examples/ac.cpp
 ```
 
-未提供源码路径时：
+自定义时间限制：
+
+```bash
+./build/minijudge -t 2000 examples/tle.cpp
+```
+
+等价写法：
+
+```bash
+./build/minijudge --time-limit 2000 examples/tle.cpp
+```
+
+在 GNU `getopt_long()` 默认解析方式下，选项也可以放在源码路径之后：
+
+```bash
+./build/minijudge examples/tle.cpp --time-limit 2000
+```
+
+查看帮助：
+
+```bash
+./build/minijudge -h
+./build/minijudge --help
+```
+
+帮助信息：
 
 ```text
-Usage: ./build/minijudge <source_path>
+Usage: ./build/minijudge [options] <source_path>
+
+Options:
+  -t, --time-limit <ms>  Set time limit in milliseconds (default: 1000)
+  -h, --help             Show this help message
 ```
+
+时间限制必须为正整数。非法参数、缺少源码路径或提供多个源码路径时，程序会输出错误并退出。
 
 当前版本使用相对路径访问 `tests/` 和 `tmp/`，因此需要从项目根目录启动。
 
@@ -161,7 +194,10 @@ A-Z  a-z  0-9  _  -  #  .
 ## 评测流程
 
 ```text
-读取源码路径
+解析命令行参数
+    │
+    ▼
+读取源码路径和时间限制
     │
     ▼
 发现并校验测试点
@@ -241,11 +277,20 @@ WTERMSIG
 
 ## TLE 判定
 
-当前时间限制为：
+时间限制默认：
 
 ```text
 1000 ms
 ```
+
+可通过：
+
+```bash
+-t <ms>
+--time-limit <ms>
+```
+
+自定义。
 
 父进程通过：
 
@@ -307,7 +352,7 @@ CoreDumping:
 Test 1: AC (7.928 ms)
 Test 2: WA (14.350 ms)
 Test 2#1: RE (11.318 ms)
-Test 300: TLE (1003.545 ms)
+Test 300: TLE (2003.545 ms)
 ```
 
 编译失败：
@@ -345,7 +390,6 @@ tmp/user_program
 ## 当前限制
 
 * 必须从项目根目录运行
-* 时间限制当前固定为 1000 ms
 * 当前运行时间为 wall time，会受到系统负载、调度和虚拟机环境影响
 * core dump 处理可能导致 RE 返回明显变慢
 * 编译阶段仍通过外部 `g++` 命令完成
@@ -358,7 +402,6 @@ tmp/user_program
 
 ## 后续计划
 
-* 将时间限制改为可配置参数
 * 完善 Runner 系统调用错误处理
 * 区分 wall time 与 CPU time
 * 增加 CPU、内存等资源限制
