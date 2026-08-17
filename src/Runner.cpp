@@ -83,7 +83,7 @@ RunResult run(const std::string& exePath, const std::string& inputPath, const st
     close(pipeFd[1]); // 父进程关写
 
     int sta; // waitpid 写入子进程结束状态；正常退出 WIFEXITED / WEXITSTATUS；信号终止 WIFSIGNALED / WTERMSIG
-    bool timeOut = false;
+    bool timeOut = false, coreDump = false;
     while(1){
         pid_t waitpidResult = waitpid(pid, &sta, WNOHANG);
         if(waitpidResult == -1){
@@ -91,11 +91,12 @@ RunResult run(const std::string& exePath, const std::string& inputPath, const st
             close(pipeFd[0]);
             return {RunStatus::InternalError, getElapsedUs()};
         }
+        coreDump = coreDump || isCoreDumping(pid); // C++短路，一旦检测到 CoreDumping，保持状态。
         if(waitpidResult > 0){
             break;
         }
         long long elapsedUs = getElapsedUs();
-        if(elapsedUs > timeLimitMs * 1000 && !isCoreDumping(pid)){
+        if(elapsedUs > timeLimitMs * 1000 && !coreDump){
             kill(pid, SIGKILL);
             timeOut = true;
             waitpid(pid, &sta, 0); // 回收被杀死的子进程，防止僵尸进程，读取signal终止状态信息
