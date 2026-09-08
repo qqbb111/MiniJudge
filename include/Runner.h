@@ -11,6 +11,7 @@ enum class RunStatus{
 struct RunResult{
     RunStatus status;
     long long timeUs;
+    long long memoryKb;
 };
 
 RunResult run(const std::string& exePath, const std::string& inputPath, const std::string& actualOutputPath, long long timeLimitMs);
