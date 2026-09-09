@@ -3,22 +3,24 @@
 #include <filesystem>
 #include <set>
 
+namespace fs = std::filesystem;
+
 bool findTestCases(const std::string& testDir, std::vector<std::string>& testNames, std::string& errMessage){
     testNames.clear();
     errMessage.clear();
-    if(!std::filesystem::exists(testDir)){
+    if(!fs::exists(testDir)){
         errMessage = "No testDir found";
         return false;
     }
-    if(!std::filesystem::is_directory(testDir)){
+    if(!fs::is_directory(testDir)){
         errMessage = "TestDir is not a directory: " + testDir;
         return false;
     }
 
     std::set<std::string> inputNames, outputNames;
-    for(const auto& it : std::filesystem::directory_iterator(testDir)){
+    for(const auto& it : fs::directory_iterator(testDir)){
         if(!it.is_regular_file()) continue;
-        std::filesystem::path path = it.path();
+        fs::path path = it.path();
         std::string filename = path.filename().string();
         
         if(filename == ".in" || filename == ".out"){

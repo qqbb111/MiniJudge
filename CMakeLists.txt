@@ -1,27 +1,27 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.12)
 project(MiniJudge)
 
 set(CMAKE_CXX_STANDARD 17)
 
+file(GLOB SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+)
+
 add_executable(
     minijudge
-    src/main.cpp
-    src/Compiler.cpp
-    src/Runner.cpp
-    src/Checker.cpp
-    src/TestCasesFinder.cpp
+    ${SOURCES}
 )
 
 target_include_directories(
-    minijudge 
-    PRIVATE 
+    minijudge
+    PRIVATE
     include
 )
 
 target_compile_options(
-    minijudge 
-    PRIVATE 
-    -Wall 
-    -Wextra 
+    minijudge
+    PRIVATE
+    -Wall
+    -Wextra
     -Wpedantic
 )

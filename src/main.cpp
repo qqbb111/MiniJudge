@@ -11,9 +11,12 @@
 #include "Checker.h"
 #include "TestCasesFinder.h"
 
-const char *shortOptions = "t:h";
+namespace fs = std::filesystem;
+
+const char *shortOptions = "t:m:h";
 static option longOptions[] = {
     {"time-limit", required_argument, nullptr, 't'},
+    {"memory-limit", required_argument, nullptr, 'm'},
     {"help", no_argument, nullptr, 'h'},
     {nullptr, 0, nullptr, 0}
 };
@@ -21,6 +24,7 @@ static option longOptions[] = {
 int main(int argc, char *argv[]) {
     int opt;
     long long timeLimitMs = 1000;
+    long long memoryLimitMiB = 64;
     while ((opt = getopt_long(argc, argv, shortOptions, longOptions, nullptr)) != -1) {
         switch (opt) {
             case 't': {
@@ -36,9 +40,23 @@ int main(int argc, char *argv[]) {
                 }
                 break;
             }
+            case 'm': {
+                std::string memoryText = optarg;
+                auto result = std::from_chars(memoryText.data(), memoryText.data() + memoryText.size(), memoryLimitMiB);
+                if (result.ec != std::errc{} || result.ptr != memoryText.data() + memoryText.size()) {
+                    std::cerr << "Invalid memory limit\n";
+                    return 1;
+                }
+                if (memoryLimitMiB <= 0) {
+                    std::cerr << "Memory limit must be positive\n";
+                    return 1;
+                }
+                break;
+            }
             case 'h':
                 std::cout << "Usage: " << argv[0] << " [options] <source_path>\n\nOptions:\n"
-                          << "  -t, --time-limit <ms>  Set time limit in milliseconds (default: 1000)\n"
+                          << "  -t, --time-limit <ms>  Set time limit in milliseconds (default: 1000 ms)\n"
+                          << "  -m, --memory-limit <MiB>  Set memory limit in MiBiByte (default: 64 MiB)\n"
                           << "  -h, --help             Show this help message\n";
                 return 0;
             default:
@@ -67,29 +85,33 @@ int main(int argc, char *argv[]) {
 
     std::cout << std::fixed << std::setprecision(3);
     for (const std::string &name : testNames) {
-        std::filesystem::path input = std::filesystem::path(testDir) / (name + ".in");
-        std::filesystem::path expected = std::filesystem::path(testDir) / (name + ".out");
-        std::filesystem::path actualOutput = std::filesystem::path("tmp") / ("actual_" + name + ".out");
+        fs::path input = fs::path(testDir) / (name + ".in");
+        fs::path expected = fs::path(testDir) / (name + ".out");
+        fs::path actualOutput = fs::path("tmp") / ("actual_" + name + ".out");
 
-        RunResult runResult = run(exe, input.string(), actualOutput.string(), timeLimitMs);
+        RunResult runResult = run(exe, input.string(), actualOutput.string(), timeLimitMs, memoryLimitMiB);
         std::cout << "Test " << name << ": ";
         if (runResult.status == RunStatus::RuntimeError) {
-            std::cout << "RE (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryKb / 1024.0 << " MB)\n";
-            continue;
-        }
-        if (runResult.status == RunStatus::InternalError) {
-            std::cout << "Run failed (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryKb / 1024.0 << " MB)\n";
+            std::cout << "RE (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
             continue;
         }
         if (runResult.status == RunStatus::TimeLimitExceeded) {
-            std::cout << "TLE (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryKb / 1024.0 << " MB)\n";
+            std::cout << "TLE (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
+            continue;
+        }
+        if (runResult.status == RunStatus::MemoryLimitExceeded) {
+            std::cout << "MLE (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
+            continue;
+        }
+        if (runResult.status == RunStatus::InternalError) {
+            std::cout << "Run failed (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
             continue;
         }
 
         if (compare(actualOutput.string(), expected.string())) {
-            std::cout << "AC (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryKb / 1024.0 << " MB)\n";
+            std::cout << "AC (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
         } else {
-            std::cout << "WA (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryKb / 1024.0 << " MB)\n";
+            std::cout << "WA (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
         }
     }
     return 0;
