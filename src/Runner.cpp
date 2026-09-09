@@ -139,6 +139,11 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
         return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
     }
 
+    if (!killCgroup(cgroupPath)) {
+        removeCgroup(cgroupPath);
+        return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
+    }
+
     if (!removeCgroup(cgroupPath)) {
         return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
     }

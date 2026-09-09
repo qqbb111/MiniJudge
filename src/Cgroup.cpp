@@ -6,7 +6,7 @@
 #include <string>
 #include <system_error>
 
-#include <unistd.h> // getpid
+#include <unistd.h> // getpid, usleep
 
 namespace fs = std::filesystem;
 
@@ -69,7 +69,6 @@ bool createCgroup(const std::string &path, long long memoryLimitBytes) {
 
 bool joinCgroup(const std::string &path) {
     fs::path procsPath = fs::path(path) / "cgroup.procs";
-
     std::ofstream file(procsPath);
 
     if (!file) {
@@ -84,6 +83,55 @@ bool joinCgroup(const std::string &path) {
     }
 
     return true;
+}
+
+bool killCgroup(const std::string &path) {
+    fs::path cgroupPath = path;
+    fs::path killPath = cgroupPath / "cgroup.kill";
+    fs::path eventsPath = cgroupPath / "cgroup.events";
+
+    std::ofstream killFile(killPath);
+    if (!killFile) {
+        std::cerr << "Failed to open cgroup.kill: " << killPath << '\n';
+        return false;
+    }
+
+    killFile << 1;
+    killFile.close();
+
+    if (killFile.fail()) {
+        std::cerr << "Failed to kill cgroup: " << path << '\n';
+        return false;
+    }
+
+    while (true) {
+        std::ifstream eventsFile(eventsPath);
+        if (!eventsFile) {
+            std::cerr << "Failed to open cgroup.events: " << eventsPath << '\n';
+            return false;
+        }
+
+        std::string key;
+        long long value;
+        bool found = false;
+
+        while (eventsFile >> key >> value) {
+            if (key == "populated") {
+                found = true;
+                if (value == 0) {
+                    return true;
+                }
+                break;
+            }
+        }
+
+        if (!found) {
+            std::cerr << "Failed to find populated in cgroup.events\n";
+            return false;
+        }
+
+        usleep(1000);
+    }
 }
 
 bool readOomKillCount(const std::string &path, long long &count) {
@@ -112,7 +160,7 @@ bool readOomKillCount(const std::string &path, long long &count) {
 bool readMemoryPeak(const std::string &path, long long &peakBytes) {
     fs::path peakPath = fs::path(path) / "memory.peak";
     std::ifstream file(peakPath);
-    
+
     if (!file) {
         std::cerr << "Failed to open memory.peak: " << peakPath << '\n';
         return false;

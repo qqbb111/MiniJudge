@@ -20,8 +20,16 @@ const double eps = 1e-12;
 const int N = 5e5 + 10;
 
 void solve(){
-    // int pid = fork();
+    pid_t pid = fork();
 
+    if (pid == 0) {
+        while (true) {
+            sleep(1);
+        }
+    }
+
+    int a, b; cin >> a >> b;
+    cout << a + b;
 }
 
 signed main(){
