@@ -4,12 +4,13 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 
 > 🌾 **100% 古法编程** · 手搓 · 手调 · 手测 ( •̀ ω •́ )✧
 
-支持编译待评测源码、自动发现测试点、批量运行程序、输入输出重定向、运行时间统计以及 AC、WA、CE、RE、TLE 判定。
+支持编译待评测源码、自动发现测试点、批量运行程序、输入输出重定向、运行时间统计、峰值内存统计以及 AC、WA、CE、RE、TLE、MLE 判定。
 
 ## 当前功能
 
 * 通过命令行指定待评测的 C++ 源码
 * 支持通过 `-t` / `--time-limit` 自定义时间限制，默认 `1000 ms`
+* 支持通过 `-m` / `--memory-limit` 自定义内存限制，默认 `64 MiB`
 * 支持 `-h` / `--help` 查看命令行帮助
 * 使用 `g++` 编译源码
 * 将编译错误保存到 `tmp/compile.log`
@@ -23,7 +24,11 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * 捕获非零退出码及信号终止，判定 RE
 * 检测运行超时并通过 `SIGKILL` 终止超时进程
 * 处理 core dump 导致的 RE/TLE 误判问题
-* 统计每个测试点运行时间
+* 使用 cgroup v2 的 `memory.max` 限制内存，并通过 `memory.swap.max = 0` 禁用 swap
+* 通过 `memory.events` 的 `oom_kill` 判断 MLE
+* 通过 `memory.peak` 统计测试点峰值内存
+* 使用 `cgroup.kill` 清理残留后代进程，等待 `populated 0` 后删除控制组
+* 统计每个测试点运行时间和峰值内存
 * 使用 `diff -wB` 比较实际输出与标准答案
 * 使用 CMake 管理项目构建
 
@@ -34,6 +39,7 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * `CE`：编译错误
 * `RE`：运行时错误
 * `TLE`：超过时间限制
+* `MLE`：发生 OOM kill，超过内存限制
 * `Run failed`：MiniJudge 内部运行错误
 
 ## 项目结构
@@ -46,6 +52,7 @@ MiniJudge/
 │
 ├── include/
 │   ├── Compiler.h
+│   ├── Cgroup.h
 │   ├── Runner.h
 │   ├── Checker.h
 │   └── TestCasesFinder.h
@@ -53,6 +60,7 @@ MiniJudge/
 ├── src/
 │   ├── main.cpp
 │   ├── Compiler.cpp
+│   ├── Cgroup.cpp
 │   ├── Runner.cpp
 │   ├── Checker.cpp
 │   └── TestCasesFinder.cpp
@@ -66,7 +74,8 @@ MiniJudge/
 模块职责：
 
 * `Compiler`：编译待评测源码
-* `Runner`：创建评测进程、重定向输入输出、统计运行时间并判断运行状态
+* `Runner`：创建评测进程、重定向输入输出、统计运行时间和内存并判断运行状态
+* `Cgroup`：配置内存限制、加入控制组、读取资源统计并清理后代进程
 * `Checker`：比较实际输出与标准答案
 * `TestCasesFinder`：发现并校验测试数据
 * `main.cpp`：解析命令行参数并组织完整评测流程
@@ -77,8 +86,12 @@ MiniJudge/
 
 * Linux
 * g++，支持 C++17
-* CMake 3.10 或更高版本
+* CMake 3.12 或更高版本
 * GNU `diff`
+* cgroup v2，已启用 memory controller
+* 内核提供 `memory.swap.max`、`memory.peak` 和 `cgroup.kill` 等当前代码使用的接口
+
+运行前需要由管理员为当前用户配置可管理的 `/sys/fs/cgroup/minijudge/` 子树，并在该层启用 memory controller。评测程序以普通用户身份运行；当前尚无自动配置脚本，不能仅完成编译就直接运行评测。
 
 ## 获取项目
 
@@ -118,10 +131,17 @@ cmake --build build
 ./build/minijudge [options] <source_path>
 ```
 
-使用默认 `1000 ms` 时间限制：
+使用默认 `1000 ms` 时间限制和 `64 MiB` 内存限制：
 
 ```bash
 ./build/minijudge examples/ac.cpp
+```
+
+自定义时间和内存限制：
+
+```bash
+./build/minijudge -t 1000 -m 64 examples/ac.cpp
+./build/minijudge --time-limit 1000 --memory-limit 64 examples/ac.cpp
 ```
 
 自定义时间限制：
@@ -149,17 +169,15 @@ cmake --build build
 ./build/minijudge --help
 ```
 
-帮助信息：
+参数说明：
 
 ```text
-Usage: ./build/minijudge [options] <source_path>
-
-Options:
-  -t, --time-limit <ms>  Set time limit in milliseconds (default: 1000)
-  -h, --help             Show this help message
+-t, --time-limit <ms>      时间限制，单位 ms，默认 1000
+-m, --memory-limit <MiB>   内存限制，单位 MiB，默认 64
+-h, --help                显示帮助信息
 ```
 
-时间限制必须为正整数。非法参数、缺少源码路径或提供多个源码路径时，程序会输出错误并退出。
+时间限制和内存限制必须为正整数。非法参数、缺少源码路径或提供多个源码路径时，程序会输出错误并退出。
 
 当前版本使用相对路径访问 `tests/` 和 `tmp/`，因此需要从项目根目录启动。
 
@@ -193,178 +211,43 @@ A-Z  a-z  0-9  _  -  #  .
 
 ## 评测流程
 
-```text
-解析命令行参数
-    │
-    ▼
-读取源码路径和时间限制
-    │
-    ▼
-发现并校验测试点
-    │
-    ▼
-编译待评测源码
-    │
-    ├── 编译失败 ──► CE
-    │
-    ▼
-fork 创建评测子进程
-    │
-    ├── dup2 重定向 stdin / stdout
-    │
-    └── execv 执行用户程序
-    │
-    ▼
-父进程 waitpid(WNOHANG)
-    │
-    ├── 超时 ──────► SIGKILL ──► TLE
-    ├── 信号终止 ──► RE
-    ├── 非零退出码 ► RE
-    │
-    ▼
-比较实际输出
-    │
-    ├── 输出相同 ──► AC
-    └── 输出不同 ──► WA
-```
+1. 解析源码路径、时间限制和内存限制。
+2. 扫描并校验测试数据，使用 `g++` 编译源码；编译失败输出 CE。
+3. 为当前测试点创建 `/sys/fs/cgroup/minijudge/run`，设置内存限制并禁用 swap。
+4. `fork` 创建评测子进程；子进程先加入 cgroup，再通过 `dup2` 重定向输入输出、`execv` 执行用户程序。
+5. 父进程使用 `waitpid(WNOHANG)` 轮询，并检查 wall time；超时后发送 `SIGKILL` 并回收直接子进程。检测到 core dump 后暂缓超时终止，以处理 RE/TLE 误判。
+6. 读取 `memory.events` 中的 `oom_kill` 和 `memory.peak`。
+7. 写入 `cgroup.kill` 清理残留后代进程，等待 `cgroup.events` 的 `populated 0`，再删除 cgroup。
+8. 无内部错误时，优先根据 OOM kill 判定 MLE，再根据超时标记和退出状态判定 TLE / RE。
+9. 正常退出且退出码为 0 时，用 `diff -wB` 比较输出，判定 AC / WA。
+10. 输出当前测试点的状态、运行时间和峰值内存。
 
-源码只编译一次，编译成功后依次运行全部测试点。
+源码只编译一次，编译成功后依次运行全部测试点。内部运行或资源管理失败显示 `Run failed`。
 
-## 运行状态
-
-`Runner` 使用：
-
-```cpp
-enum class RunStatus {
-    Ok,
-    RuntimeError,
-    TimeLimitExceeded,
-    InternalError
-};
-```
-
-并返回：
-
-```cpp
-struct RunResult {
-    RunStatus status;
-    long long timeUs;
-};
-```
-
-`timeUs` 表示从启动评测到用户程序结束所经过的时间，单位为微秒。
-
-## RE 判定
-
-以下情况会被判定为 RE：
-
-* 用户程序正常退出，但退出码非 `0`
-* 用户程序被异常信号终止
-* 用户程序主动向自身发送 `SIGKILL`
-* `SIGSEGV`、`SIGFPE` 等运行时异常
-
-MiniJudge 使用：
-
-```text
-WIFEXITED
-WEXITSTATUS
-
-WIFSIGNALED
-WTERMSIG
-```
-
-分析子进程退出状态。
-
-## TLE 判定
-
-时间限制默认：
-
-```text
-1000 ms
-```
-
-可通过：
-
-```bash
--t <ms>
---time-limit <ms>
-```
-
-自定义。
-
-父进程通过：
-
-```cpp
-waitpid(pid, &status, WNOHANG);
-```
-
-非阻塞检查用户程序状态，并通过 `steady_clock` 统计 wall time。
-
-用户程序超过时间限制后，MiniJudge 会发送：
-
-```text
-SIGKILL
-```
-
-并再次调用 `waitpid()` 回收子进程。
-
-TLE 不等价于“程序最终死于 `SIGKILL`”。
-
-只有 MiniJudge 因超过时间限制主动发送 `SIGKILL`，并且最终确认用户进程因此终止时，才判定为 TLE。
-
-用户程序主动触发 `SIGKILL` 仍判定为 RE。
-
-## Core Dump 处理
-
-Ubuntu 等 Linux 环境可能通过 Apport 等程序处理 core dump。
-
-例如：
-
-```text
-SIGSEGV
-    ↓
-Core Dump
-    ↓
-Apport 处理崩溃信息
-    ↓
-waitpid 暂时无法完成回收
-```
-
-这可能导致已经发生 RE 的程序超过 wall-time 限制，从而被误判为 TLE。
-
-MiniJudge 会读取：
-
-```text
-/proc/<pid>/status
-```
-
-中的：
-
-```text
-CoreDumping:
-```
-
-字段，在进程正在进行 core dump 时暂缓 TLE 终止，并最终根据 `waitpid()` 返回的真实终止信号判断 RE/TLE。
+运行时间为 Runner 从开始到返回的 wall time，包含控制组创建、等待和清理开销；内存为清理前读取的 cgroup 峰值，输出单位为 MiB。实现细节见 [学习笔记](notes/learning-notes.md)。
 
 ## 输出示例
 
+以下仅展示输出格式，数值不是本次实测结果，各行可来自不同程序：
+
 ```text
-Test 1: AC (7.928 ms)
-Test 2: WA (14.350 ms)
-Test 2#1: RE (11.318 ms)
-Test 300: TLE (2003.545 ms)
+Test 1: AC (2.314 ms, 1.203 MiB)
+Test 2: WA (1.827 ms, 1.180 MiB)
+Test 2#1: RE (11.318 ms, 1.180 MiB)
+Test 300: TLE (1001.362 ms, 1.156 MiB)
+Test abc: MLE (58.441 ms, 64.000 MiB)
 ```
 
 编译失败：
 
 ```text
-examples/compile_error.cpp CE
+examples/ce.cpp CE
 ```
 
 MiniJudge 内部运行错误：
 
 ```text
-Test 1: Run failed (3.214 ms)
+Test 1: Run failed (3.214 ms, 0.000 MiB)
 ```
 
 ## 临时文件
@@ -396,7 +279,9 @@ tmp/user_program
 * 输出比较仍依赖 GNU `diff`
 * 不支持包含任意 Shell 特殊字符的源码路径
 * 尚未实现 CPU Time 限制
-* 尚未实现内存限制
+* cgroup delegation 仍需手工配置
+* 测试点使用固定的 `run` cgroup 和临时文件路径，不支持并行评测或多个实例同时运行
+* 尚未实现完整 sandbox
 * 尚未实现其他系统资源限制
 * 测试点按照字符串字典序运行
 
@@ -404,6 +289,7 @@ tmp/user_program
 
 * 完善 Runner 系统调用错误处理
 * 区分 wall time 与 CPU time
-* 增加 CPU、内存等资源限制
+* 增加 CPU time 等其他资源限制
+* 提供 cgroup 环境配置脚本
 * 减少对 Shell 命令的依赖
 * 完善测试集与项目文档

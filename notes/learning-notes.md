@@ -469,13 +469,14 @@ while ((opt = getopt_long(
 例如：
 
 ```cpp
-const char* shortOptions = "t:h";
+const char* shortOptions = "t:m:h";
 ```
 
 含义：
 
 ```text
 t:  -t 必须携带参数
+m:  -m 必须携带参数
 h   -h 不携带参数
 ```
 
@@ -495,6 +496,7 @@ h   -h 不携带参数
 ```cpp
 static option longOptions[] = {
     {"time-limit", required_argument, nullptr, 't'},
+    {"memory-limit", required_argument, nullptr, 'm'},
     {"help", no_argument, nullptr, 'h'},
     {nullptr, 0, nullptr, 0}
 };
@@ -698,6 +700,7 @@ minijudge [options] <source_path>
 
 ```text
 time limit = 1000 ms
+memory limit = 64 MiB
 ```
 
 支持：
@@ -705,6 +708,8 @@ time limit = 1000 ms
 ```bash
 -t 2000
 --time-limit 2000
+-m 64
+--memory-limit 64
 ```
 
 帮助：
@@ -1462,6 +1467,7 @@ enum class RunStatus {
     Ok,
     RuntimeError,
     TimeLimitExceeded,
+    MemoryLimitExceeded,
     InternalError
 };
 ```
@@ -1472,6 +1478,7 @@ enum class RunStatus {
 struct RunResult {
     RunStatus status;
     long long timeUs;
+    long long memoryBytes;
 };
 ```
 
@@ -1533,7 +1540,7 @@ kill(getpid(), SIGKILL);
 RE
 ```
 
-正确概念：
+正确概念（已排除 cgroup OOM kill）：
 
 ```text
 MiniJudge 因超时主动发送 SIGKILL
@@ -1797,6 +1804,7 @@ WA
 CE
 RE
 TLE
+MLE
 ```
 
 修改 Runner 后不能只测试新加入的功能。
@@ -2044,103 +2052,462 @@ waitpid 最终观察到什么
 
 ---
 
-# MiniJudge 当前状态
+## cgroup v2：内存限制与进程组清理
 
-## 已完成
+### 1. cgroup 的作用
+
+cgroup 是 Linux 内核提供的资源管理机制，可以把一组进程放进同一个控制组，并统一进行资源统计和限制。
+
+MiniJudge 当前使用：
 
 ```text
-源码编译
-CE
-
-自动扫描测试点
-.in / .out 配对校验
-
-批量运行
-
-CMake
-
-CLI 参数解析
-默认 1000ms 时间限制
--t / --time-limit 自定义时间限制
--h / --help
-
-fork
-
-execv
-
-dup2
-
-pipe
-
-waitpid
-
-WNOHANG
-
-运行时间统计
-
-AC
-
-WA
-
-RE
-
-TLE
-
-Core Dump 导致的 RE/TLE 误判处理
-
-RunStatus enum
-
-完整基础回归测试
+memory.max
+memory.swap.max
+memory.events
+memory.peak
+cgroup.procs
+cgroup.kill
+cgroup.events
 ```
 
-当前评测流程：
+cgroup 控制的是一组进程，而不是单独一个 PID。这里的“进程组”指控制组中的进程集合，不是由 PGID 标识的 POSIX 进程组。
+
+---
+
+### 2. cgroup v2 基本结构
+
+MiniJudge 要求运行前配置好委派给普通用户的 cgroup 子树；一种配置结构如下：
 
 ```text
-CLI
-├─ source_path
-└─ time limit
-↓
-Compiler
-↓
-user_program
-↓
-Runner
-├─ fork
-├─ dup2
-├─ execv
-├─ waitpid(WNOHANG)
-├─ RE
-├─ TLE
-└─ timeUs
-↓
-Checker
-↓
-AC / WA
+/sys/fs/cgroup/minijudge/
+├── manager/
+└── run/
+```
+
+其中（manager 用于放置管理进程，由环境配置准备；当前代码只创建和删除 run）：
+
+```text
+minijudge/
+→ 长期存在的 delegated cgroup
+
+run/
+→ 每个测试点临时创建
+→ 用户程序及其后代进程进入这里
+→ 评测结束后删除
 ```
 
 ---
 
-# 当前限制
+### 3. memory.max
+
+设置 cgroup 的硬内存限制：
 
 ```text
-使用 wall time
-受机器负载和虚拟机调度影响
-
-SIGSEGV / SIGFPE 的 core dump
-可能导致 RE 返回较慢
-
-Compiler 仍依赖外部 g++ 命令
-
-Checker 仍依赖 diff
-
-必须从项目根目录运行
-
-尚未限制 CPU time
-
-尚未限制内存
-
-尚未限制其他资源
+memory.max = 67108864
 ```
+
+表示：
+
+```text
+64 MiB = 64 * 1024 * 1024 bytes
+```
+
+MiniJudge 内部使用 bytes 保存资源数据，输出时再转换为 MiB。
+
+---
+
+### 4. memory.swap.max
+
+```text
+memory.swap.max = 0
+```
+
+禁止该 cgroup 使用 swap。
+
+这样测试时内存限制行为更直接，不会因为 swap 延缓 OOM。
+
+---
+
+### 5. 子进程加入 cgroup
+
+child 在 `execv()` 前将自己的 PID 写入：
+
+```text
+cgroup.procs
+```
+
+逻辑：
+
+```text
+fork
+↓
+child
+↓
+getpid()
+↓
+写入 cgroup.procs
+↓
+execv
+```
+
+由 child 自己加入 cgroup，可以避免：
+
+```text
+parent fork
+↓
+child 已经开始执行
+↓
+parent 才来得及移动 child
+```
+
+这种竞态问题。
+
+---
+
+### 6. MLE 判定
+
+只看：
+
+```text
+SIGKILL
+```
+
+不能判断 MLE。
+
+因为：
+
+```text
+MiniJudge 超时主动 SIGKILL
+→ TLE
+
+cgroup OOM killer SIGKILL
+→ MLE
+```
+
+MiniJudge 使用：
+
+```text
+memory.events
+```
+
+中的：
+
+```text
+oom_kill
+```
+
+进行判断。
+
+例如：
+
+```text
+oom_kill 1
+```
+
+说明 cgroup 中发生过 OOM kill。
+
+排除 MiniJudge 内部错误后，当前判定优先级：
+
+```text
+oom_kill > 0
+→ MLE
+
+否则 timeOut && SIGKILL
+→ TLE
+
+其他 signal
+→ RE
+```
+
+---
+
+### 7. memory.peak
+
+```text
+memory.peak
+```
+
+记录该 cgroup 曾达到的最大内存使用量，单位为 bytes。
+
+MiniJudge 将其作为测试点峰值内存；当前在清理残留后代进程之前读取，因此不包含读取之后可能出现的新峰值。它是控制组统计口径，不等同于单进程 RSS。
+
+内部：
+
+```text
+memoryBytes
+```
+
+显示：
+
+```cpp
+memoryBytes / 1024.0 / 1024.0
+```
+
+转换为 MiB。
+
+相比 `wait4()` 的 `ru_maxrss`，cgroup 的 `memory.peak` 更适合作为 MiniJudge 的统计口径，因为：
+
+```text
+资源限制
+峰值统计
+OOM 判定
+```
+
+都来自同一套 cgroup 机制，并且能够覆盖用户程序产生的多个进程。
+
+---
+
+### 8. waitpid 不代表整个用户程序已经结束
+
+测试程序：
+
+```cpp
+#include <unistd.h>
+
+int main() {
+    pid_t descendantPid = fork();
+    if (descendantPid < 0) return 1;
+
+    if (descendantPid == 0) {
+        while (true) {
+            sleep(1);
+        }
+    }
+
+    return 0;
+}
+```
+
+用户程序主进程退出后，MiniJudge 等待它直接创建的评测进程：
+
+```cpp
+waitpid(judgeChildPid, &status, 0)
+```
+
+只能确认 MiniJudge 直接创建的 child 已结束。
+
+用户程序 fork 出来的后代仍可能继续运行。
+
+此时：
+
+```text
+cgroup.procs
+```
+
+仍然存在 PID，直接删除 cgroup 会失败：
+
+```text
+Device or resource busy
+```
+
+结论：
+
+```text
+waitpid(直接子进程)
+≠
+整个用户 workload 已结束
+```
+
+---
+
+### 9. cgroup.kill
+
+向：
+
+```text
+cgroup.kill
+```
+
+写：
+
+```text
+1
+```
+
+可以终止该 cgroup 中的全部剩余进程。
+
+它是只写控制接口：
+
+```bash
+echo 1 > cgroup.kill
+```
+
+不能通过：
+
+```bash
+cat cgroup.kill
+```
+
+读取状态。
+
+---
+
+### 10. cgroup.kill 也存在时序问题
+
+写入：
+
+```text
+cgroup.kill = 1
+```
+
+只表示向内核发出 kill 请求。
+
+函数返回时，进程不一定已经彻底退出。
+
+如果马上：
+
+```text
+killCgroup()
+↓
+removeCgroup()
+```
+
+可能仍然得到：
+
+```text
+Device or resource busy
+```
+
+所以 `killCgroup()` 在写入 `1` 后继续读取：
+
+```text
+cgroup.events
+```
+
+等待：
+
+```text
+populated 0
+```
+
+再返回。当前等待循环没有超时上限。
+
+最终清理流程：
+
+```text
+读取 oom_kill
+↓
+读取 memory.peak
+↓
+cgroup.kill
+↓
+等待 populated == 0
+↓
+删除 cgroup
+```
+
+---
+
+### 11. cgroup delegation
+
+普通用户默认不能直接在：
+
+```text
+/sys/fs/cgroup
+```
+
+下创建 cgroup。
+
+因此需要由管理员把一棵 cgroup 子树委派给普通用户管理。
+
+delegation 后：
+
+```bash
+./build/minijudge ...
+```
+
+可以直接运行，不需要：
+
+```bash
+sudo ./build/minijudge ...
+```
+
+管理员权限只应该用于环境配置，不应该让用户评测程序以 root 权限运行。
+
+---
+
+### 12. MB 与 MiB
+
+```text
+1 MB  = 1000 * 1000 bytes
+1 MiB = 1024 * 1024 bytes
+```
+
+MiniJudge 的：
+
+```text
+-m 64
+```
+
+当前表示：
+
+```text
+64 MiB
+```
+
+---
+
+### 常见坑
+
+1. 只用 `SIGKILL` 无法区分 MLE 和 TLE；
+2. 当前实现未启用 `RLIMIT_AS`；同时设置它可能先导致 `bad_alloc`，无法可靠得到 cgroup OOM 事件；
+3. `waitpid()` 在当前调用方式下只等待指定的直接子进程，不能保证后代进程结束；
+4. `cgroup.kill` 返回不代表进程已经立即全部消失；
+5. cgroup 还有进程时直接删除会得到 `EBUSY`；
+6. `memory.peak` 单位是 bytes；
+7. cgroup delegation 和普通文件目录权限不是一回事。
+
+---
+
+# MiniJudge 当前状态
+
+## 已完成
+
+* CMake 构建、源码编译及 CE 判定
+* 自动发现测试点并校验同名 `.in` / `.out`
+* AC / WA / CE / RE / TLE / MLE 判定
+* `fork + execv + dup2 + waitpid(WNOHANG)`
+* pipe 报告子进程准备阶段的内部错误
+* Core Dump 期间 RE/TLE 误判处理
+* `-t / --time-limit`，默认 1000 ms
+* `-m / --memory-limit`，默认 64 MiB
+* cgroup v2 内存限制和禁用 swap
+* `memory.events` OOM 检测、`memory.peak` 峰值内存统计
+* 在手工委派的 cgroup 子树中运行
+* `cgroup.kill` 后代进程清理，等待 `populated 0` 后删除控制组
+
+以上按当前源码整理，不代表本次文档更新重新运行了完整回归测试。
+
+当前评测流程：
+
+```text
+CLI：source_path / time limit / memory limit
+↓
+发现并校验测试点 → Compiler → user_program
+↓
+Runner（逐测试点）
+├─ 创建 cgroup，配置 memory.max / memory.swap.max
+├─ fork → 子进程加入 cgroup → dup2 → execv
+├─ waitpid(WNOHANG)，检查超时和 CoreDumping
+├─ 读取 oom_kill / memory.peak
+├─ cgroup.kill → 等待 populated 0 → 删除 cgroup
+└─ 返回状态、timeUs、memoryBytes
+↓
+正常退出且退出码为 0 → Checker → AC / WA
+否则 → MLE / TLE / RE / Run failed
+```
+
+# 当前限制
+
+* cgroup delegation 仍需要手工环境配置
+* 当前测试点使用固定 `run` cgroup 和临时文件路径，不支持并行评测或多实例同时运行
+* 尚未实现完整 sandbox 和其他系统资源限制
+* 使用 wall time，包含 Runner 的创建、等待和清理开销，受机器负载和虚拟机调度影响
+* 尚未限制 CPU time；core dump 可能导致 RE 返回较慢
+* `killCgroup()` 等待 `populated 0` 暂无超时上限，异常路径清理仍需完善
+* OOM 事件和峰值内存在清理前读取，后代进程尚未全部停止时统计仍可能变化
+* Compiler 仍依赖外部 `g++` 命令，Checker 仍依赖 `diff`
+* 必须从项目根目录运行
 
 ---
 
