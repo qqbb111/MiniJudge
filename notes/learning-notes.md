@@ -273,28 +273,26 @@ CE
 
 # 输出比较
 
-## 13. `diff`
+## 13. Checker：移除 `diff` 依赖
 
-当前使用：
+Checker 不再通过外部 `diff` 命令比较答案，而是直接使用 C++ 读取输出文件。
 
-```bash
-diff -wB actual.out expected.out
-```
+当前比较规则：
 
-返回值：
+- 忽略空行；
+- 忽略每行末尾的空格、Tab 和 `\r`；
+- 行首和行中间的空白仍参与比较；
+- 其他内容逐字符一致。
 
-```text
-0 文件相同
-1 文件不同
->1 diff 自身错误
-```
-
-参数：
+Checker 使用三态结果区分：
 
 ```text
--w 忽略空白字符差异
--B 忽略空白行
+Accepted     → 输出一致
+WrongAnswer  → 输出不同
+Error        → 文件打开或读取失败
 ```
+
+Checker 的内部错误不能判为 WA，由 `main` 输出 `Judge failed`。
 
 ---
 
@@ -2604,6 +2602,7 @@ waitpid
 * `-m / --memory-limit`，默认 64 MiB
 * cgroup v2 内存限制和禁用 swap
 * `memory.events` OOM 检测、`memory.peak` 峰值内存统计
+* 内置 Checker：忽略空行和行末空白，其余内容逐字符比较
 * 在手工委派的 cgroup 子树中运行
 * `cgroup.kill` 后代进程清理，等待 `populated 0` 后删除控制组
 
@@ -2638,7 +2637,7 @@ Runner（逐测试点）
 * 尚未限制 CPU time；core dump 可能导致 RE 返回较慢
 * `killCgroup()` 等待 `populated 0` 暂无超时上限，异常路径清理仍需完善
 * OOM 事件和峰值内存在清理前读取，后代进程尚未全部停止时统计仍可能变化
-* Compiler 仍依赖外部 `g++` 命令，Checker 仍依赖 `diff`
+* Compiler 仍依赖外部 `g++` 命令
 * 必须从项目根目录运行
 
 ---

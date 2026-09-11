@@ -12,7 +12,7 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * 支持通过 `-t` / `--time-limit` 自定义时间限制，默认 `1000 ms`
 * 支持通过 `-m` / `--memory-limit` 自定义内存限制，默认 `64 MiB`
 * 支持 `-h` / `--help` 查看命令行帮助
-* 使用 `fork()` + `execvp()` 调用 `g++` 编译源码，不依赖 Shell 启动编译器
+* 使用 `fork()` + `execvp()` 调用 `g++` 编译源码
 * 使用 `dup2()` 将编译器标准错误重定向到 `tmp/compile.log`
 * 自动扫描并校验 `tests/` 目录中的测试数据
 * 支持字符串测试点名称
@@ -30,7 +30,7 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * 通过 `memory.peak` 统计测试点峰值内存
 * 使用 `cgroup.kill` 清理残留后代进程，等待 `populated 0` 后删除控制组
 * 统计每个测试点运行时间和峰值内存
-* 使用 `diff -wB` 比较实际输出与标准答案
+* 内置输出比较器：忽略空行和行末空白，其余内容逐字符比较
 * 使用 CMake 管理项目构建
 
 当前支持以下评测结果：
@@ -42,6 +42,7 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * `TLE`：超过时间限制
 * `MLE`：发生 OOM kill，超过内存限制
 * `Run failed`：MiniJudge 内部运行错误
+* `Judge failed`：Checker 读取实际输出或标准答案失败
 
 ## 项目结构
 
@@ -90,7 +91,6 @@ MiniJudge/
 * Linux
 * g++，支持 C++17
 * CMake 3.12 或更高版本
-* GNU `diff`
 * cgroup v2，已启用 memory controller
 * 内核提供 `memory.swap.max`、`memory.peak` 和 `cgroup.kill` 等当前代码使用的接口
 
@@ -230,7 +230,7 @@ A-Z  a-z  0-9  _  -  #  .
 6. 读取 `memory.events` 中的 `oom_kill` 和 `memory.peak`。
 7. 写入 `cgroup.kill` 清理残留后代进程，等待 `cgroup.events` 的 `populated 0`，再删除 cgroup。
 8. 无内部错误时，优先根据 OOM kill 判定 MLE，再根据超时标记和退出状态判定 TLE / RE。
-9. 正常退出且退出码为 0 时，用 `diff -wB` 比较输出，判定 AC / WA。
+9. 正常退出且退出码为 0 时，使用内置 Checker 比较实际输出与标准答案，判定 AC / WA；Checker 自身失败时输出 `Judge failed`。
 10. 输出当前测试点的状态、运行时间和峰值内存。
 
 源码只编译一次，编译成功后依次运行全部测试点。内部运行或资源管理失败显示 `Run failed`。
@@ -287,7 +287,6 @@ tmp/user_program
 * 当前运行时间为 wall time，会受到系统负载、调度和虚拟机环境影响
 * core dump 处理可能导致 RE 返回明显变慢
 * 编译阶段仍通过外部 `g++` 命令完成
-* 输出比较仍依赖 GNU `diff`
 * 尚未实现 CPU Time 限制
 * 当前 cgroup delegation 依赖 `scripts/setup-cgroup.sh`；新 shell 会话运行 MiniJudge 前需要重新执行该脚本
 * 测试点使用固定的 `run` cgroup 和临时文件路径，不支持并行评测或多个实例同时运行

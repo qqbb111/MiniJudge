@@ -21,8 +21,7 @@ const int N = 5e5 + 10;
 
 void solve(){
     int a, b; cin >> a >> b;
-    // if((a + b) % 2) cout << a + b << endl;
-    cout << a + b + 1 << endl;
+    cout << ' ' << a + b << endl;
 }
 
 signed main(){

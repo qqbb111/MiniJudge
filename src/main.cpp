@@ -14,12 +14,7 @@
 namespace fs = std::filesystem;
 
 const char *shortOptions = "t:m:h";
-static option longOptions[] = {
-    {"time-limit", required_argument, nullptr, 't'},
-    {"memory-limit", required_argument, nullptr, 'm'},
-    {"help", no_argument, nullptr, 'h'},
-    {nullptr, 0, nullptr, 0}
-};
+static option longOptions[] = {{"time-limit", required_argument, nullptr, 't'}, {"memory-limit", required_argument, nullptr, 'm'}, {"help", no_argument, nullptr, 'h'}, {nullptr, 0, nullptr, 0}};
 
 int main(int argc, char *argv[]) {
     int opt;
@@ -55,9 +50,9 @@ int main(int argc, char *argv[]) {
             }
             case 'h':
                 std::cout << "Usage: " << argv[0] << " [options] <source_path>\n\nOptions:\n"
-                          << "  -t, --time-limit <ms>  Set time limit in milliseconds (default: 1000 ms)\n"
-                          << "  -m, --memory-limit <MiB>  Set memory limit in MiBiByte (default: 64 MiB)\n"
-                          << "  -h, --help             Show this help message\n";
+                          << "  -t, --time-limit <ms>     Set time limit in milliseconds (default: 1000 ms)\n"
+                          << "  -m, --memory-limit <MiB>  Set memory limit in MiB (default: 64 MiB)\n"
+                          << "  -h, --help                Show this help message\n";
                 return 0;
             default:
                 return 1;
@@ -108,11 +103,10 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        if (compare(actualOutput.string(), expected.string())) {
-            std::cout << "AC (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
-        } else {
-            std::cout << "WA (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
-        }
+        CompareResult compareResult = compare(actualOutput.string(), expected.string());
+        if (compareResult == CompareResult::Accepted) std::cout << "AC (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
+        if (compareResult == CompareResult::WrongAnswer) std::cout << "WA (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
+        if (compareResult == CompareResult::Error) std::cout << "Judge failed (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
     }
     return 0;
 }
