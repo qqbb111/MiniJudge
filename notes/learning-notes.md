@@ -2424,6 +2424,27 @@ sudo ./build/minijudge ...
 
 管理员权限只应该用于环境配置，不应该让用户评测程序以 root 权限运行。
 
+仓库中的 `scripts/setup-cgroup.sh` 提供了当前环境的最小配置流程：
+
+```bash
+./scripts/setup-cgroup.sh
+```
+
+脚本会检查 cgroup v2 和 `memory` controller，创建：
+
+```text
+/sys/fs/cgroup/minijudge/
+└── manager/
+```
+
+然后在 `minijudge` 层开启 `+memory`，并把 `minijudge`、`cgroup.procs` 和 `cgroup.subtree_control` 的管理权限交给当前用户。脚本通过 `sudo` 执行需要管理员权限的操作；评测命令本身仍应以普通用户身份运行：
+
+```bash
+./build/minijudge examples/ac.cpp
+```
+
+当前脚本会把执行它的当前 shell 放入 `manager`。打开新的 shell 后，运行 MiniJudge 前需要重新执行脚本；脚本的重复执行和失败回滚仍需完善。
+
 ---
 
 ### 12. MB 与 MiB
@@ -2499,7 +2520,7 @@ Runner（逐测试点）
 
 # 当前限制
 
-* cgroup delegation 仍需要手工环境配置
+* cgroup delegation 仍需要先执行 `scripts/setup-cgroup.sh`，脚本的重复执行和失败回滚仍需完善
 * 当前测试点使用固定 `run` cgroup 和临时文件路径，不支持并行评测或多实例同时运行
 * 尚未实现完整 sandbox 和其他系统资源限制
 * 使用 wall time，包含 Runner 的创建、等待和清理开销，受机器负载和虚拟机调度影响

@@ -67,6 +67,8 @@ MiniJudge/
 │
 ├── examples/
 ├── tests/
+├── scripts/
+│   └── setup-cgroup.sh
 ├── tmp/
 └── notes/
 ```
@@ -91,7 +93,15 @@ MiniJudge/
 * cgroup v2，已启用 memory controller
 * 内核提供 `memory.swap.max`、`memory.peak` 和 `cgroup.kill` 等当前代码使用的接口
 
-运行前需要由管理员为当前用户配置可管理的 `/sys/fs/cgroup/minijudge/` 子树，并在该层启用 memory controller。评测程序以普通用户身份运行；当前尚无自动配置脚本，不能仅完成编译就直接运行评测。
+运行前需要为当前用户配置可管理的 `/sys/fs/cgroup/minijudge/` 子树，并在该层启用 memory controller。评测程序以普通用户身份运行，不能用 `sudo` 启动评测程序。
+
+仓库提供 cgroup 环境配置脚本。脚本会检查 cgroup v2 和 memory controller，创建 `minijudge/manager`，启用 memory controller，并将当前 shell 加入 `/sys/fs/cgroup/minijudge/manager`：
+
+```bash
+./scripts/setup-cgroup.sh
+```
+
+当前实现中，每次打开新的 shell 后，在运行 MiniJudge 前需要重新执行该脚本。脚本内部会在需要的位置请求管理员权限；MiniJudge 本身以普通用户身份运行，不应使用 `sudo` 启动。脚本需要在实际运行 MiniJudge 的 Linux 环境中执行。
 
 ## 获取项目
 
@@ -279,7 +289,7 @@ tmp/user_program
 * 输出比较仍依赖 GNU `diff`
 * 不支持包含任意 Shell 特殊字符的源码路径
 * 尚未实现 CPU Time 限制
-* cgroup delegation 仍需手工配置
+* 当前 cgroup delegation 依赖 `scripts/setup-cgroup.sh`；新 shell 会话运行 MiniJudge 前需要重新执行该脚本
 * 测试点使用固定的 `run` cgroup 和临时文件路径，不支持并行评测或多个实例同时运行
 * 尚未实现完整 sandbox
 * 尚未实现其他系统资源限制
@@ -290,6 +300,6 @@ tmp/user_program
 * 完善 Runner 系统调用错误处理
 * 区分 wall time 与 CPU time
 * 增加 CPU time 等其他资源限制
-* 提供 cgroup 环境配置脚本
+* 完善 cgroup 环境配置脚本的回滚、重复执行和错误处理
 * 减少对 Shell 命令的依赖
 * 完善测试集与项目文档
