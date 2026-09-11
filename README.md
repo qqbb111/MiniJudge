@@ -12,8 +12,8 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * 支持通过 `-t` / `--time-limit` 自定义时间限制，默认 `1000 ms`
 * 支持通过 `-m` / `--memory-limit` 自定义内存限制，默认 `64 MiB`
 * 支持 `-h` / `--help` 查看命令行帮助
-* 使用 `g++` 编译源码
-* 将编译错误保存到 `tmp/compile.log`
+* 使用 `fork()` + `execvp()` 调用 `g++` 编译源码，不依赖 Shell 启动编译器
+* 使用 `dup2()` 将编译器标准错误重定向到 `tmp/compile.log`
 * 自动扫描并校验 `tests/` 目录中的测试数据
 * 支持字符串测试点名称
 * 使用 `fork()` 创建独立评测进程
@@ -22,7 +22,8 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * 使用 `waitpid()` 获取用户程序退出状态
 * 使用 `WNOHANG` 非阻塞轮询进程状态
 * 捕获非零退出码及信号终止，判定 RE
-* 检测运行超时并通过 `SIGKILL` 终止超时进程
+* 检测运行超时，并通过 `cgroup.kill` 终止用户程序及其后代进程
+* `cgroup.kill` 失败时使用 `SIGKILL` 兜底终止直接评测子进程
 * 处理 core dump 导致的 RE/TLE 误判问题
 * 使用 cgroup v2 的 `memory.max` 限制内存，并通过 `memory.swap.max = 0` 禁用 swap
 * 通过 `memory.events` 的 `oom_kill` 判断 MLE
@@ -222,10 +223,10 @@ A-Z  a-z  0-9  _  -  #  .
 ## 评测流程
 
 1. 解析源码路径、时间限制和内存限制。
-2. 扫描并校验测试数据，使用 `g++` 编译源码；编译失败输出 CE。
+2. 扫描并校验测试数据，`fork` 编译子进程并通过 `execvp()` 执行 `g++`；编译器标准错误重定向到 `tmp/compile.log`，编译失败输出 CE。
 3. 为当前测试点创建 `/sys/fs/cgroup/minijudge/run`，设置内存限制并禁用 swap。
 4. `fork` 创建评测子进程；子进程先加入 cgroup，再通过 `dup2` 重定向输入输出、`execv` 执行用户程序。
-5. 父进程使用 `waitpid(WNOHANG)` 轮询，并检查 wall time；超时后发送 `SIGKILL` 并回收直接子进程。检测到 core dump 后暂缓超时终止，以处理 RE/TLE 误判。
+5. 父进程使用 `waitpid(WNOHANG)` 轮询，并检查 wall time；超时后通过 `cgroup.kill` 终止用户程序及其后代进程，再使用 `waitpid()` 回收直接子进程。若整组终止失败，则使用 `SIGKILL` 兜底终止直接子进程。检测到 core dump 后暂缓超时终止，以处理 RE/TLE 误判。
 6. 读取 `memory.events` 中的 `oom_kill` 和 `memory.peak`。
 7. 写入 `cgroup.kill` 清理残留后代进程，等待 `cgroup.events` 的 `populated 0`，再删除 cgroup。
 8. 无内部错误时，优先根据 OOM kill 判定 MLE，再根据超时标记和退出状态判定 TLE / RE。
@@ -287,7 +288,6 @@ tmp/user_program
 * core dump 处理可能导致 RE 返回明显变慢
 * 编译阶段仍通过外部 `g++` 命令完成
 * 输出比较仍依赖 GNU `diff`
-* 不支持包含任意 Shell 特殊字符的源码路径
 * 尚未实现 CPU Time 限制
 * 当前 cgroup delegation 依赖 `scripts/setup-cgroup.sh`；新 shell 会话运行 MiniJudge 前需要重新执行该脚本
 * 测试点使用固定的 `run` cgroup 和临时文件路径，不支持并行评测或多个实例同时运行

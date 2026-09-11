@@ -1263,7 +1263,7 @@ kill(pid, SIGKILL);
 不能处理
 ```
 
-MiniJudge 超时后使用 SIGKILL 强制结束用户程序。
+MiniJudge 超时后优先使用 `cgroup.kill` 终止用户程序及其后代；整组终止失败时，才使用 `SIGKILL` 兜底终止直接子进程。
 
 ---
 
@@ -1378,7 +1378,9 @@ waitpid(WNOHANG)
 ↓
 超过限制
 ↓
-SIGKILL
+尝试 cgroup.kill
+├── 成功 → 整组终止
+└── 失败 → SIGKILL 兜底
 ↓
 waitpid 回收
 ↓
@@ -1543,7 +1545,9 @@ RE
 正确概念（已排除 cgroup OOM kill）：
 
 ```text
-MiniJudge 因超时主动发送 SIGKILL
+MiniJudge 因超时主动调用 cgroup.kill
++
+整组终止失败时才发送 SIGKILL
 +
 最终确认子进程因此终止
 → TLE
@@ -2480,6 +2484,111 @@ MiniJudge 的：
 
 ---
 
+## Compiler：从 `system()` 到 `fork + execvp`
+
+原实现：
+
+```cpp
+std::system("g++ ...");
+```
+
+会经过 Shell。
+
+当前实现：
+
+```text
+fork
+├── child
+│   ├── open compile.log
+│   ├── dup2(stderr)
+│   └── execvp("g++", argv)
+│
+└── parent
+    └── waitpid
+```
+
+### `execv` 与 `execvp`
+
+- `execv()`：需要明确的可执行文件路径。
+- `execvp()`：会根据 `PATH` 查找程序，因此可以直接执行 `"g++"`。
+- 参数通过 `argv[]` 独立传递，不经过 Shell 拆词。
+
+### 常见坑
+
+`open()` 和 `dup2()` 应分别检查失败，否则 `open()` 失败可能最终只看到 `dup2: Bad file descriptor`。
+
+---
+
+## 管道 EOF 与 `O_CLOEXEC`
+
+Runner 使用管道区分：
+
+- 用户程序自身的 RE；
+- MiniJudge 在 `execv()` 前的内部错误。
+
+```text
+read() > 0
+→ 收到子进程写入的错误标记
+
+read() == 0
+→ EOF：所有写端均已关闭，且没有错误标记
+
+read() == -1
+→ read() 自身失败
+```
+
+`O_CLOEXEC` 会在 `execv()` 成功时自动关闭子进程继承的管道写端。
+
+如果没有它，用户程序及其后代可能继续持有写端，父进程无法收到 EOF。
+
+---
+
+## `cgroup.kill` 与 `waitpid`
+
+两者职责不同：
+
+```text
+cgroup.kill
+→ 终止用户程序及其后代进程
+
+waitpid
+→ 回收 MiniJudge 的直接子进程退出状态
+```
+
+用户程序 `fork()` 的子进程默认继承父进程所在的 cgroup，因此：
+
+```text
+run/
+├── user_program
+├── child 1
+├── child 2
+└── ...
+```
+
+可以通过 `cgroup.kill` 整组终止。
+
+TLE 当前处理：
+
+```text
+超时
+↓
+cgroup.kill
+├── 成功 → 整组终止
+└── 失败 → kill(pid, SIGKILL) 兜底终止直接子进程
+↓
+waitpid
+↓
+回收直接子进程
+```
+
+### 结论
+
+- `kill` / `cgroup.kill` 负责让进程停止运行。
+- `waitpid` 负责回收直接子进程。
+- `cgroup.kill` 能避免用户通过 `fork()` 留下后台进程。
+
+---
+
 # MiniJudge 当前状态
 
 ## 已完成
@@ -2487,7 +2596,8 @@ MiniJudge 的：
 * CMake 构建、源码编译及 CE 判定
 * 自动发现测试点并校验同名 `.in` / `.out`
 * AC / WA / CE / RE / TLE / MLE 判定
-* `fork + execv + dup2 + waitpid(WNOHANG)`
+* Compiler 使用 `fork + execvp + dup2 + waitpid` 调用 `g++`
+* Runner 使用 `fork + execv + dup2 + waitpid(WNOHANG)`
 * pipe 报告子进程准备阶段的内部错误
 * Core Dump 期间 RE/TLE 误判处理
 * `-t / --time-limit`，默认 1000 ms
@@ -2510,6 +2620,7 @@ Runner（逐测试点）
 ├─ 创建 cgroup，配置 memory.max / memory.swap.max
 ├─ fork → 子进程加入 cgroup → dup2 → execv
 ├─ waitpid(WNOHANG)，检查超时和 CoreDumping
+├─ 超时时 cgroup.kill，失败后 SIGKILL 兜底
 ├─ 读取 oom_kill / memory.peak
 ├─ cgroup.kill → 等待 populated 0 → 删除 cgroup
 └─ 返回状态、timeUs、memoryBytes

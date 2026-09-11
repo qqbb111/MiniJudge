@@ -5,7 +5,6 @@
 #include <chrono>
 #include <unistd.h>       // fork, dup2, close, execv, _exit, pipe
 #include <sys/wait.h>     // waitpid, waitpid, WIFEXITED, WEXITSTATUS
-#include <sys/resource.h> // rlimit, setrlimit, RLIMIT_AS
 #include <fcntl.h>        // open, O_RDONLY...
 #include <cstdio>         // perror
 #include <signal.h>       // SIGKILL
@@ -34,7 +33,8 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
     long long peakMemoryBytes = 0ll;
 
     int pipeFd[2];                        // fork 之前创建管道，供父子进程间通信
-    if (pipe2(pipeFd, O_CLOEXEC) == -1) { // 如果不用 pipe2 的 O_CLOEXEC 参数（Close On Exec），用户代码可以继续继承子进程的文件描述符表，往管道里写入东西，导致 Run Failed
+    if (pipe2(pipeFd, O_CLOEXEC) == -1) { /* 如果不用 pipe2 的 O_CLOEXEC 参数（Close On Exec），保证 execv 成功后自动关闭管道写端，避免用户程序及其后代继承该
+                                            fd，（用户代码可以继续继承子进程的文件描述符表，往管道里写入东西，导致 Run Failed）*/
         std::perror("pipe");
         return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
     }
@@ -104,6 +104,18 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
         if (waitpidResult == -1) {
             std::perror("waitpid");
             close(pipeFd[0]);
+            if (!killCgroup(cgroupPath)) {
+                if (kill(pid, SIGKILL) == -1) {
+                    std::perror("kill");
+                    removeCgroup(cgroupPath);
+                    return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
+                }
+            }
+            if (waitpid(pid, &sta, 0) == -1) {
+                std::perror("waitpid");
+                removeCgroup(cgroupPath);
+                return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
+            }
             removeCgroup(cgroupPath);
             return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
         }
@@ -113,9 +125,20 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
         }
         long long elapsedUs = getElapsedUs();
         if (elapsedUs > timeLimitMs * 1000 && !coreDump) {
-            kill(pid, SIGKILL);
             timeOut = true;
-            waitpid(pid, &sta, 0); // 回收被杀死的子进程，防止僵尸进程，读取signal终止状态信息
+            if (!killCgroup(cgroupPath)) {
+                // cgroup 整组终止失败，至少兜底终止直接子进程
+                if (kill(pid, SIGKILL) == -1) {
+                    std::perror("kill");
+                    removeCgroup(cgroupPath);
+                    return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
+                }
+            }
+            if (waitpid(pid, &sta, 0) == -1) { // 回收被杀死的子进程，防止僵尸进程，读取signal终止状态信息
+                std::perror("waitpid");
+                removeCgroup(cgroupPath);
+                return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
+            }
             break;
         }
         usleep(1000);
@@ -124,17 +147,26 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
     // std::cout << coreDump << '\n';
 
     char errorFlag;
-    ssize_t byteRead = read(pipeFd[0], &errorFlag, sizeof(errorFlag)); // 返回值是实际读到了多少字节（注意不是元素个数）
+    ssize_t byteRead = read(pipeFd[0], &errorFlag, sizeof(errorFlag)); // 返回值是实际读到了多少字节（注意不是元素个数），0 = EOF
     close(pipeFd[0]);
+
+    if (byteRead == -1) {
+        std::perror("read");
+        killCgroup(cgroupPath);
+        removeCgroup(cgroupPath);
+        return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
+    }
 
     long long oomCnt = 0ll;
 
     if (!readOomKillCount(cgroupPath, oomCnt)) {
+        killCgroup(cgroupPath);
         removeCgroup(cgroupPath);
         return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
     }
 
     if (!readMemoryPeak(cgroupPath, peakMemoryBytes)) {
+        killCgroup(cgroupPath);
         removeCgroup(cgroupPath);
         return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
     }
@@ -148,7 +180,7 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
         return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
     }
 
-    // 这种分法就是看是不是 MiniJudge 自己的问题，自己的问题肯定只有 byteRead > 0
+    // byteRead > 0 表示子进程在 exec 前发生 MiniJudge 内部错误
     if (byteRead > 0) {
         return {RunStatus::InternalError, getElapsedUs(), 0ll};
     }
