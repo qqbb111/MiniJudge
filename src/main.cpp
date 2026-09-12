@@ -5,6 +5,7 @@
 #include <iomanip>  // setprecision
 #include <getopt.h> // getopt_long
 #include <charconv>
+#include <unistd.h> // getpid
 
 #include "Compiler.h"
 #include "Runner.h"
@@ -63,6 +64,18 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    fs::path workDir = fs::path("tmp") / ("run-" + std::to_string(getpid()));
+    std::error_code ec;
+    bool created = fs::create_directories(workDir, ec);
+    if (ec) {
+        std::cerr << "Failed to create workDir " << workDir << ": " << ec.message() << '\n';
+        return 1;
+    }
+    if (!created) {
+        std::cerr << "Failed to create workDir: path already exists: " << workDir << '\n';
+        return 1;
+    }
+
     std::string testDir = "tests";
     std::string errMessage;
     std::vector<std::string> testNames;
@@ -71,10 +84,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    std::string code = argv[optind];
-    std::string exe = "tmp/user_program";
-    if (!compile(code, exe)) {
-        std::cout << code << " CE\n";
+    std::string codePath = argv[optind];
+    fs::path exePath = workDir / "user_program";
+    fs::path compileLog = workDir / "compile.log";
+    if (!compile(codePath, exePath.string(), compileLog.string())) {
+        std::cout << codePath << " CE\n";
         return 0;
     }
 
@@ -82,9 +96,9 @@ int main(int argc, char *argv[]) {
     for (const std::string &name : testNames) {
         fs::path input = fs::path(testDir) / (name + ".in");
         fs::path expected = fs::path(testDir) / (name + ".out");
-        fs::path actualOutput = fs::path("tmp") / ("actual_" + name + ".out");
+        fs::path actualOutput = workDir / ("actual_" + name + ".out");
 
-        RunResult runResult = run(exe, input.string(), actualOutput.string(), timeLimitMs, memoryLimitMiB);
+        RunResult runResult = run(exePath.string(), input.string(), actualOutput.string(), timeLimitMs, memoryLimitMiB);
         std::cout << "Test " << name << ": ";
         if (runResult.status == RunStatus::RuntimeError) {
             std::cout << "RE (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
@@ -108,5 +122,13 @@ int main(int argc, char *argv[]) {
         if (compareResult == CompareResult::WrongAnswer) std::cout << "WA (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
         if (compareResult == CompareResult::Error) std::cout << "Judge failed (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
     }
+
+    std::error_code cleanupEc;
+    fs::remove_all(workDir, cleanupEc);
+
+    if (cleanupEc) {
+        std::cerr << "Failed to remove workDir " << workDir << ": " << cleanupEc.message() << '\n'; // 评测已经成功完成，只是临时目录删除失败，不应该把 AC/WA/TLE 等评测结果推翻
+    }
+
     return 0;
 }

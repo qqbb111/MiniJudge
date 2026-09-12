@@ -27,6 +27,7 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * 处理 core dump 导致的 RE/TLE 误判问题
 * 使用 cgroup v2 的 `memory.max` 限制内存，并通过 `memory.swap.max = 0` 禁用 swap
 * 使用 cgroup v2 的 `pids.max` 将单个测试点的进程数限制为 64，防止 fork bomb 无限创建后代进程
+* 使用进程 PID 隔离每个 MiniJudge 实例的 cgroup 与临时工作目录，支持多个实例同时运行
 * 通过 `memory.events` 的 `oom_kill` 判断 MLE
 * 通过 `memory.peak` 统计测试点峰值内存
 * 使用 `cgroup.kill` 清理残留后代进程，等待 `populated 0` 后删除控制组
@@ -291,9 +292,9 @@ tmp/user_program
 * 尚未实现 CPU Time 限制
 * 当前进程数上限固定为 64，尚不支持通过命令行配置
 * 当前 cgroup delegation 依赖 `scripts/setup-cgroup.sh`；新 shell 会话运行 MiniJudge 前需要重新执行该脚本
-* 测试点使用固定的 `run` cgroup 和临时文件路径，不支持并行评测或多个实例同时运行
 * 尚未实现完整 sandbox
 * 尚未实现其他系统资源限制
+* 当前进程被 `Ctrl+C` 等外部信号中断时，正常 cleanup 可能来不及执行，临时 cgroup 和工作目录可能残留
 * 测试点按照字符串字典序运行
 
 ## 后续计划

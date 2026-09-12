@@ -3,12 +3,12 @@
 
 #include <string>
 #include <chrono>
-#include <unistd.h>       // fork, dup2, close, execv, _exit, pipe
-#include <sys/wait.h>     // waitpid, waitpid, WIFEXITED, WEXITSTATUS
-#include <fcntl.h>        // open, O_RDONLY...
-#include <cstdio>         // perror
-#include <signal.h>       // SIGKILL
-#include <fstream>        // ifstream
+#include <unistd.h>   // fork, dup2, close, execv, _exit, pipe
+#include <sys/wait.h> // waitpid, waitpid, WIFEXITED, WEXITSTATUS
+#include <fcntl.h>    // open, O_RDONLY...
+#include <cstdio>     // perror
+#include <signal.h>   // SIGKILL
+#include <fstream>    // ifstream
 #include <iostream>
 
 bool isCoreDumping(pid_t pid) {
@@ -38,7 +38,7 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
         std::perror("pipe");
         return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
     }
-    std::string cgroupPath = "/sys/fs/cgroup/minijudge/run";
+    std::string cgroupPath = "/sys/fs/cgroup/minijudge/run-" + std::to_string(getpid());
     if (!createCgroup(cgroupPath, memoryLimitMiB * 1024LL * 1024)) {
         close(pipeFd[0]);
         close(pipeFd[1]);

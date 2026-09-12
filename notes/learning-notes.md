@@ -2634,6 +2634,7 @@ pids.events: max > 0
 * 内置 Checker：忽略空行和行末空白，其余内容逐字符比较
 * 在手工委派的 cgroup 子树中运行
 * `cgroup.kill` 后代进程清理，等待 `populated 0` 后删除控制组
+* 使用主进程 PID 隔离每个实例的 cgroup 和 `tmp/run-<PID>/` 工作目录，支持并发运行
 
 以上按当前源码整理，不代表本次文档更新重新运行了完整回归测试。
 
@@ -2645,7 +2646,7 @@ CLI：source_path / time limit / memory limit
 发现并校验测试点 → Compiler → user_program
 ↓
 Runner（逐测试点）
-├─ 创建 cgroup，配置 memory.max / memory.swap.max / pids.max
+├─ 创建 `run-<PID>` cgroup，配置 memory.max / memory.swap.max / pids.max
 ├─ fork → 子进程加入 cgroup → dup2 → execv
 ├─ waitpid(WNOHANG)，检查超时和 CoreDumping
 ├─ 超时时 cgroup.kill，失败后 SIGKILL 兜底
@@ -2660,13 +2661,13 @@ Runner（逐测试点）
 # 当前限制
 
 * cgroup delegation 仍需要先执行 `scripts/setup-cgroup.sh`，脚本的重复执行和失败回滚仍需完善
-* 当前测试点使用固定 `run` cgroup 和临时文件路径，不支持并行评测或多实例同时运行
 * 尚未实现完整 sandbox 和其他系统资源限制
 * 使用 wall time，包含 Runner 的创建、等待和清理开销，受机器负载和虚拟机调度影响
 * 尚未限制 CPU time；core dump 可能导致 RE 返回较慢
 * `killCgroup()` 等待 `populated 0` 暂无超时上限，异常路径清理仍需完善
 * OOM 事件和峰值内存在清理前读取，后代进程尚未全部停止时统计仍可能变化
 * Compiler 仍依赖外部 `g++` 命令
+* `Ctrl+C` 等外部信号中断时，正常 cleanup 可能来不及执行，临时 cgroup 和工作目录可能残留
 * 必须从项目根目录运行
 
 ---

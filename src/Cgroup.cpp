@@ -40,7 +40,6 @@ bool createCgroup(const std::string &path, long long memoryLimitBytes) {
     }
 
     fs::path cgroupPath = path;
-
     std::error_code ec;
     bool created = fs::create_directory(cgroupPath, ec);
     if (ec) {

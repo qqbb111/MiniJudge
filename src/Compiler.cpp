@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <string>
 
-bool compile(const std::string &codePath, const std::string &exePath) { // 编译
+bool compile(const std::string &codePath, const std::string &exePath, const std::string &logPath) { // 编译
     pid_t pid = fork();
     if (pid == -1) {
         std::perror("fork");
@@ -19,7 +19,7 @@ bool compile(const std::string &codePath, const std::string &exePath) { // 编�
         };
 
         // dup2 重定向输出
-        int logFd = open("tmp/compile.log", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int logFd = open(logPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (logFd == -1) {
             childFail("open compile.log");
         }
