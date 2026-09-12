@@ -2587,6 +2587,35 @@ waitpid
 
 ---
 
+## cgroup v2：进程数限制
+
+`pids.max` 限制一个 cgroup 中允许存在的进程数量。
+
+```text
+pids.max      → 进程数上限
+pids.current  → 当前进程数
+pids.events   → 进程数限制触发事件
+```
+
+用户程序 `fork()` 出来的子进程默认继承父进程所在的 cgroup，因此 fork bomb 无法通过创建后代绕过限制。
+
+本项目当前：
+
+```text
+pids.max = 64
+```
+
+实测 fork bomb 达到上限后：
+
+```text
+pids.current = 64
+pids.events: max > 0
+```
+
+其中 `pids.events` 的 `max` 是触发进程数上限的累计事件次数，不是上限值；上限看 `pids.max`，当前数量看 `pids.current`。后续 `fork()` 会被内核拒绝，评测结束后通过 `cgroup.kill` 清理整组进程并删除临时 cgroup。当前不会因为触发 `pids.max` 单独产生新的 verdict；程序若继续运行会按 TLE 处理，若自行退出则仍按最终退出状态判定。
+
+---
+
 # MiniJudge 当前状态
 
 ## 已完成
@@ -2600,7 +2629,7 @@ waitpid
 * Core Dump 期间 RE/TLE 误判处理
 * `-t / --time-limit`，默认 1000 ms
 * `-m / --memory-limit`，默认 64 MiB
-* cgroup v2 内存限制和禁用 swap
+* cgroup v2 内存限制、禁用 swap 和进程数限制
 * `memory.events` OOM 检测、`memory.peak` 峰值内存统计
 * 内置 Checker：忽略空行和行末空白，其余内容逐字符比较
 * 在手工委派的 cgroup 子树中运行
@@ -2616,7 +2645,7 @@ CLI：source_path / time limit / memory limit
 发现并校验测试点 → Compiler → user_program
 ↓
 Runner（逐测试点）
-├─ 创建 cgroup，配置 memory.max / memory.swap.max
+├─ 创建 cgroup，配置 memory.max / memory.swap.max / pids.max
 ├─ fork → 子进程加入 cgroup → dup2 → execv
 ├─ waitpid(WNOHANG)，检查超时和 CoreDumping
 ├─ 超时时 cgroup.kill，失败后 SIGKILL 兜底

@@ -43,12 +43,10 @@ bool createCgroup(const std::string &path, long long memoryLimitBytes) {
 
     std::error_code ec;
     bool created = fs::create_directory(cgroupPath, ec);
-
     if (ec) {
         std::cerr << "Failed to create cgroup " << cgroupPath << ": " << ec.message() << '\n';
         return false;
     }
-
     if (!created) {
         std::cerr << "Failed to create cgroup: path already exists: " << cgroupPath << '\n';
         return false;
@@ -58,8 +56,11 @@ bool createCgroup(const std::string &path, long long memoryLimitBytes) {
         cleanupCgroup(cgroupPath);
         return false;
     }
-
     if (!writeControlFile(cgroupPath / "memory.swap.max", 0)) {
+        cleanupCgroup(cgroupPath);
+        return false;
+    }
+    if (!writeControlFile(cgroupPath / "pids.max", 64)) {
         cleanupCgroup(cgroupPath);
         return false;
     }

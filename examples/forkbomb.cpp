@@ -2,7 +2,9 @@
 using namespace std;
 
 #define qqbb ios::sync_with_stdio(false), cin.tie(0), cout.tie(0)
-#define vdbg(v) for (auto _ : v) cerr << _ << ' '; cerr << endl;
+#define vdbg(v)                                                                                                                                                                                        \
+    for (auto _ : v) cerr << _ << ' ';                                                                                                                                                                 \
+    cerr << endl;
 #define dbg(v) cerr << (#v) << ": " << v << endl;
 #define legal(x, lo, hi) (lo <= x && x <= hi)
 #define all(x) (x).begin(), (x).end()
@@ -19,26 +21,23 @@ const int mod = 1000000007;
 const double eps = 1e-12;
 const int N = 5e5 + 10;
 
-void solve(){
-    for (int i = 0; i < 20; ++i) {
-        if (fork() == 0) {
-            while (true) {
-                sleep(1);
-            }
-        }
+void solve() {
+
+    while (fork() != -1) {
     }
+
     while (true) {
         sleep(1);
     }
 }
 
-signed main(){
+signed main() {
     qqbb;
     // freopen(".in", "r", stdin), freopen(".out", "w", stdout);
     // cout << fixed << setprecision(10);
     int _ = 1;
     // cin >> _;
-    while(_--){
+    while (_--) {
         solve();
     }
     return 0;

@@ -36,6 +36,10 @@ if ! grep -qw memory "$MINIJUDGE_CGROUP/cgroup.subtree_control"; then
     echo +memory | sudo tee "$MINIJUDGE_CGROUP/cgroup.subtree_control" > /dev/null
 fi
 
+if ! grep -qw pids "$MINIJUDGE_CGROUP/cgroup.subtree_control"; then
+    echo +pids | sudo tee "$MINIJUDGE_CGROUP/cgroup.subtree_control" > /dev/null
+fi
+
 # 把 MiniJudge 需要管理的 cgroup 节点交给当前用户
 sudo chown "$CURRENT_USER:$CURRENT_GROUP" "$MINIJUDGE_CGROUP"
 sudo chown "$CURRENT_USER:$CURRENT_GROUP" "$MINIJUDGE_CGROUP/cgroup.procs"

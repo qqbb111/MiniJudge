@@ -17,9 +17,7 @@ bool readOutput(const std::string &path, std::vector<std::string> &lines) {
 
     while (std::getline(file, line)) {
         trimTrailingWhitespace(line);
-        if (line.empty()) { // 忽略空行以及只包含行末空白的行
-            continue;
-        }
+        if (line.empty()) continue; // 忽略空行以及只包含行末空白的行
         lines.push_back(line);
     }
 
