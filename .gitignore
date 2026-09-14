@@ -5,4 +5,6 @@ tmp/*
 # cmake build files
 build/
 
-#learning notes
+#random tests
+tests/random_*.in
+tests/random_*.out

@@ -1,11 +1,14 @@
 #include <iostream>
 #include <string>
-#include <filesystem>
 #include <vector>
+
+#include <filesystem>
 #include <iomanip>  // setprecision
 #include <getopt.h> // getopt_long
 #include <charconv>
 #include <unistd.h> // getpid
+
+#include <thread>
 
 #include "Compiler.h"
 #include "Runner.h"
@@ -13,6 +16,52 @@
 #include "TestCasesFinder.h"
 
 namespace fs = std::filesystem;
+
+struct TestResult {
+    std::string name;
+    std::string verdict;
+    long long timeUs;
+    long long memoryBytes;
+};
+
+TestResult judgeOneTest(const std::string &name, const fs::path &testDir, const fs::path &workDir, const fs::path &exePath, long long timeLimitMs, long long memoryLimitMiB) {
+    fs::path input = testDir / (name + ".in");
+    fs::path expected = testDir / (name + ".out");
+    fs::path actualOutput = workDir / ("actual_" + name + ".out");
+    fs::path cgroupPath = fs::path("/sys/fs/cgroup/minijudge") / ("run-" + std::to_string(getpid()) + "-" + name);
+
+    RunResult runResult = run(exePath.string(), input.string(), actualOutput.string(), cgroupPath.string(), timeLimitMs, memoryLimitMiB);
+    switch (runResult.status) {
+        case RunStatus::RuntimeError:
+            return {name, "RE", runResult.timeUs, runResult.memoryBytes};
+
+        case RunStatus::TimeLimitExceeded:
+            return {name, "TLE", runResult.timeUs, runResult.memoryBytes};
+
+        case RunStatus::MemoryLimitExceeded:
+            return {name, "MLE", runResult.timeUs, runResult.memoryBytes};
+
+        case RunStatus::InternalError:
+            return {name, "Run failed", runResult.timeUs, runResult.memoryBytes};
+
+        case RunStatus::Ok:
+            break;
+    }
+
+    CompareResult compareResult = compare(actualOutput.string(), expected.string());
+    switch (compareResult) {
+        case CompareResult::Accepted:
+            return {name, "AC", runResult.timeUs, runResult.memoryBytes};
+
+        case CompareResult::WrongAnswer:
+            return {name, "WA", runResult.timeUs, runResult.memoryBytes};
+
+        case CompareResult::Error:
+            return {name, "Judge failed", runResult.timeUs, runResult.memoryBytes};
+    }
+
+    return {name, "Judge failed", runResult.timeUs, runResult.memoryBytes};
+}
 
 const char *shortOptions = "t:m:h";
 static option longOptions[] = {{"time-limit", required_argument, nullptr, 't'}, {"memory-limit", required_argument, nullptr, 'm'}, {"help", no_argument, nullptr, 'h'}, {nullptr, 0, nullptr, 0}};
@@ -64,7 +113,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    std::string codePath = argv[optind];
+    std::string testDir = "tests";
     fs::path workDir = fs::path("tmp") / ("run-" + std::to_string(getpid()));
+    fs::path exePath = workDir / "user_program";
+    fs::path compileLog = workDir / "compile.log";
+
     std::error_code ec;
     bool created = fs::create_directories(workDir, ec);
     if (ec) {
@@ -76,7 +130,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    std::string testDir = "tests";
     std::string errMessage;
     std::vector<std::string> testNames;
     if (!findTestCases(testDir, testNames, errMessage)) {
@@ -84,48 +137,25 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    std::string codePath = argv[optind];
-    fs::path exePath = workDir / "user_program";
-    fs::path compileLog = workDir / "compile.log";
     if (!compile(codePath, exePath.string(), compileLog.string())) {
         std::cout << codePath << " CE\n";
         return 0;
     }
 
-    std::cout << std::fixed << std::setprecision(3);
-    for (const std::string &name : testNames) {
-        fs::path input = fs::path(testDir) / (name + ".in");
-        fs::path expected = fs::path(testDir) / (name + ".out");
-        fs::path actualOutput = workDir / ("actual_" + name + ".out");
+    std::vector<TestResult> results(testNames.size());
+    std::vector<std::thread> threads;
 
-        RunResult runResult = run(exePath.string(), input.string(), actualOutput.string(), timeLimitMs, memoryLimitMiB);
-        std::cout << "Test " << name << ": ";
-        if (runResult.status == RunStatus::RuntimeError) {
-            std::cout << "RE (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
-            continue;
-        }
-        if (runResult.status == RunStatus::TimeLimitExceeded) {
-            std::cout << "TLE (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
-            continue;
-        }
-        if (runResult.status == RunStatus::MemoryLimitExceeded) {
-            std::cout << "MLE (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
-            continue;
-        }
-        if (runResult.status == RunStatus::InternalError) {
-            std::cout << "Run failed (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
-            continue;
-        }
-
-        CompareResult compareResult = compare(actualOutput.string(), expected.string());
-        if (compareResult == CompareResult::Accepted) std::cout << "AC (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
-        if (compareResult == CompareResult::WrongAnswer) std::cout << "WA (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
-        if (compareResult == CompareResult::Error) std::cout << "Judge failed (" << runResult.timeUs / 1000.0 << " ms, " << runResult.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
+    for (std::size_t i = 0; i < testNames.size(); i++) {
+        threads.emplace_back([&, i]() { // 默认其他变量按引用捕获；i 按值捕获，每个线程保存自己的测试点下标
+            results[i] = judgeOneTest(testNames[i], testDir, workDir, exePath, timeLimitMs, memoryLimitMiB);
+        });
     }
+    for (std::thread &thread : threads) thread.join();
+    for (const TestResult &result : results)
+        std::cout << std::fixed << std::setprecision(3) << "Test " << result.name << ": " << result.verdict << " (" << result.timeUs / 1000.0 << " ms, " << result.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
 
     std::error_code cleanupEc;
     fs::remove_all(workDir, cleanupEc);
-
     if (cleanupEc) {
         std::cerr << "Failed to remove workDir " << workDir << ": " << cleanupEc.message() << '\n'; // 评测已经成功完成，只是临时目录删除失败，不应该把 AC/WA/TLE 等评测结果推翻
     }

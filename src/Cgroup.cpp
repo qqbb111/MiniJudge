@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <system_error>
+#include <fcntl.h>
 
 #include <unistd.h> // getpid, usleep
 
@@ -67,21 +68,14 @@ bool createCgroup(const std::string &path, long long memoryLimitBytes) {
     return true;
 }
 
-bool joinCgroup(const std::string &path) {
-    fs::path procsPath = fs::path(path) / "cgroup.procs";
-    std::ofstream file(procsPath);
-
-    if (!file) {
-        std::cerr << "Failed to open cgroup.procs: " << procsPath << '\n';
+bool joinCgroup(const std::string &procsPath) {
+    int fd = open(procsPath.c_str(), O_WRONLY);
+    if (fd == -1) return false;
+    if (write(fd, "0\n", 2) != 2) {
+        close(fd);
         return false;
     }
-    file << getpid();
-    file.close();
-    if (file.fail()) {
-        std::cerr << "Failed to join cgroup: " << path << '\n';
-        return false;
-    }
-
+    close(fd);
     return true;
 }
 
@@ -104,7 +98,7 @@ bool killCgroup(const std::string &path) {
         return false;
     }
 
-    while (true) {
+    while (true) { // ?
         std::ifstream eventsFile(eventsPath);
         if (!eventsFile) {
             std::cerr << "Failed to open cgroup.events: " << eventsPath << '\n';

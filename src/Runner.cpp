@@ -26,7 +26,7 @@ bool isCoreDumping(pid_t pid) {
     return false;
 }
 
-RunResult run(const std::string &exePath, const std::string &inputPath, const std::string &actualOutputPath, long long timeLimitMs, long long memoryLimitMiB) {
+RunResult run(const std::string &exePath, const std::string &inputPath, const std::string &actualOutputPath, const std::string &cgroupPath, long long timeLimitMs, long long memoryLimitMiB) {
     auto start = std::chrono::steady_clock::now();
     auto getElapsedUs = [&start]() { return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); };
 
@@ -38,12 +38,14 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
         std::perror("pipe");
         return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
     }
-    std::string cgroupPath = "/sys/fs/cgroup/minijudge/run-" + std::to_string(getpid());
+
     if (!createCgroup(cgroupPath, memoryLimitMiB * 1024LL * 1024)) {
         close(pipeFd[0]);
         close(pipeFd[1]);
         return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
     }
+
+    std::string cgroupProcsPath = cgroupPath + "/cgroup.procs";
 
     pid_t pid = fork();
     if (pid == -1) {
@@ -57,43 +59,27 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
     if (pid == 0) {
         close(pipeFd[0]); // 子进程关读
 
-        auto childFail = [&](const char *message) {
-            std::perror(message);
+        auto childFail = [&]() {
             char errorFlag = 1;
             write(pipeFd[1], &errorFlag, sizeof(errorFlag));
             _exit(1);
         };
 
-        if (!joinCgroup(cgroupPath)) {
-            char errorFlag = 1;
-            write(pipeFd[1], &errorFlag, sizeof(errorFlag));
-            _exit(1);
-        }
+        if (!joinCgroup(cgroupProcsPath)) childFail();
 
         // dup2 重定向输入输出
         int inputFd = open(inputPath.c_str(), O_RDONLY);
-        if (inputFd == -1) {
-            childFail("open input file");
-        }
-        if (dup2(inputFd, STDIN_FILENO) == -1) {
-            childFail("dup2 input file");
-        }
+        if (inputFd == -1) childFail();
+        if (dup2(inputFd, STDIN_FILENO) == -1) childFail();
         close(inputFd);
 
         int actualOutputFd = open(actualOutputPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (actualOutputFd == -1) {
-            childFail("open actual output file");
-        }
-        if (dup2(actualOutputFd, STDOUT_FILENO) == -1) {
-            childFail("dup2 actual output file");
-        }
+        if (actualOutputFd == -1) childFail();
+        if (dup2(actualOutputFd, STDOUT_FILENO) == -1) childFail();
         close(actualOutputFd);
 
-        std::string program = exePath;
-        char *argv[] = {program.data(), nullptr};
-        if (execv(program.c_str(), argv) == -1) {
-            childFail("execv");
-        }
+        char *argv[] = {const_cast<char *>(exePath.c_str()), nullptr};
+        if (execv(argv[0], argv) == -1) childFail();
     }
     close(pipeFd[1]); // 父进程关写，不关的话，下面的 read() 一直会阻塞，因为还有写端开着
 

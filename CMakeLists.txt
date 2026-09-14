@@ -3,6 +3,8 @@ project(MiniJudge)
 
 set(CMAKE_CXX_STANDARD 17)
 
+find_package(Threads REQUIRED)
+
 file(GLOB SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
@@ -10,6 +12,12 @@ file(GLOB SOURCES CONFIGURE_DEPENDS
 add_executable(
     minijudge
     ${SOURCES}
+)
+
+target_link_libraries(
+    minijudge
+    PRIVATE
+    Threads::Threads
 )
 
 target_include_directories(

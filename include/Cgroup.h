@@ -3,7 +3,7 @@
 
 bool createCgroup(const std::string &path, long long memoryLimitBytes);
 
-bool joinCgroup(const std::string &path);
+bool joinCgroup(const std::string &procsPath);
 
 bool killCgroup(const std::string &path);
 

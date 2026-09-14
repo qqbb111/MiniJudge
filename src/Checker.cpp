@@ -4,19 +4,15 @@
 #include <string>
 #include <vector>
 
-void trimTrailingWhitespace(std::string &line) {
-    while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) {
-        line.pop_back();
-    }
-}
-
 bool readOutput(const std::string &path, std::vector<std::string> &lines) {
     std::ifstream file(path);
     if (!file) return false;
     std::string line;
 
     while (std::getline(file, line)) {
-        trimTrailingWhitespace(line);
+        while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) {
+            line.pop_back();
+        }
         if (line.empty()) continue; // 忽略空行以及只包含行末空白的行
         lines.push_back(line);
     }
