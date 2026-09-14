@@ -4,7 +4,7 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 
 > 🌾 **100% 古法编程** · 手搓 · 手调 · 手测 ( •̀ ω •́ )✧
 
-支持编译待评测源码、自动发现测试点、批量运行程序、输入输出重定向、运行时间统计、峰值内存统计以及 AC、WA、CE、RE、TLE、MLE 判定。
+支持编译待评测源码、自动发现测试点、多测试点并行评测、输入输出重定向、运行时间与峰值内存统计，以及 AC、WA、CE、RE、TLE、MLE 判定。
 
 ## 当前功能
 
@@ -13,7 +13,7 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * 支持通过 `-m` / `--memory-limit` 自定义内存限制，默认 `64 MiB`
 * 支持 `-h` / `--help` 查看命令行帮助
 * 使用 `fork()` + `execvp()` 调用 `g++` 编译源码
-* 使用 `dup2()` 将编译器标准错误重定向到 `tmp/compile.log`
+* 使用 `dup2()` 将编译器标准错误重定向到当前实例的 `compile.log`
 * 自动扫描并校验 `tests/` 目录中的测试数据
 * 支持字符串测试点名称
 * 使用 `fork()` 创建独立评测进程
@@ -28,12 +28,18 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * 使用 cgroup v2 的 `memory.max` 限制内存，并通过 `memory.swap.max = 0` 禁用 swap
 * 使用 cgroup v2 的 `pids.max` 将单个测试点的进程数限制为 64，防止 fork bomb 无限创建后代进程
 * 使用进程 PID 隔离每个 MiniJudge 实例的 cgroup 与临时工作目录，支持多个实例同时运行
+* 为每个测试点创建独立 cgroup 和实际输出文件，支持多个测试点同时评测
+* 使用固定数量的 Worker 线程并行执行测试点
+* Worker 数量根据 `std::thread::hardware_concurrency()` 自动确定，并限制为不超过测试点数量
+* 使用共享索引配合 `std::mutex` 动态分配测试任务，先完成的 Worker 自动领取下一个测试点
+* 仅在领取任务时持有互斥锁，实际评测过程不持锁，避免评测流程被串行化
+* 所有 Worker 完成后统一按测试点顺序输出结果
 * 通过 `memory.events` 的 `oom_kill` 判断 MLE
 * 通过 `memory.peak` 统计测试点峰值内存
 * 使用 `cgroup.kill` 清理残留后代进程，等待 `populated 0` 后删除控制组
 * 统计每个测试点运行时间和峰值内存
 * 内置输出比较器：忽略空行和行末空白，其余内容逐字符比较
-* 使用 CMake 管理项目构建
+* 使用 CMake 管理项目构建，并通过 `Threads::Threads` 声明线程依赖
 
 当前支持以下评测结果：
 
@@ -70,7 +76,9 @@ MiniJudge/
 │   └── TestCasesFinder.cpp
 │
 ├── examples/
+│   └── ac_cpubound.cpp
 ├── tests/
+│   └── generate.cpp
 ├── scripts/
 │   └── setup-cgroup.sh
 ├── tmp/
@@ -84,7 +92,7 @@ MiniJudge/
 * `Cgroup`：配置内存限制、加入控制组、读取资源统计并清理后代进程
 * `Checker`：比较实际输出与标准答案
 * `TestCasesFinder`：发现并校验测试数据
-* `main.cpp`：解析命令行参数并组织完整评测流程
+* `main.cpp`：解析命令行参数，组织完整评测流程，并通过固定 Worker 与共享索引调度测试点并行执行
 
 `build/` 和 `tmp/` 中生成的临时文件不会提交到 Git 仓库。
 
@@ -225,19 +233,39 @@ A-Z  a-z  0-9  _  -  #  .
 ## 评测流程
 
 1. 解析源码路径、时间限制和内存限制。
-2. 扫描并校验测试数据，`fork` 编译子进程并通过 `execvp()` 执行 `g++`；编译器标准错误重定向到 `tmp/compile.log`，编译失败输出 CE。
-3. 为当前测试点创建 `/sys/fs/cgroup/minijudge/run`，设置内存限制并禁用 swap。
-4. `fork` 创建评测子进程；子进程先加入 cgroup，再通过 `dup2` 重定向输入输出、`execv` 执行用户程序。
-5. 父进程使用 `waitpid(WNOHANG)` 轮询，并检查 wall time；超时后通过 `cgroup.kill` 终止用户程序及其后代进程，再使用 `waitpid()` 回收直接子进程。若整组终止失败，则使用 `SIGKILL` 兜底终止直接子进程。检测到 core dump 后暂缓超时终止，以处理 RE/TLE 误判。
-6. 读取 `memory.events` 中的 `oom_kill` 和 `memory.peak`。
-7. 写入 `cgroup.kill` 清理残留后代进程，等待 `cgroup.events` 的 `populated 0`，再删除 cgroup。
-8. 无内部错误时，优先根据 OOM kill 判定 MLE，再根据超时标记和退出状态判定 TLE / RE。
-9. 正常退出且退出码为 0 时，使用内置 Checker 比较实际输出与标准答案，判定 AC / WA；Checker 自身失败时输出 `Judge failed`。
-10. 输出当前测试点的状态、运行时间和峰值内存。
+2. 扫描并校验测试数据，创建当前 MiniJudge 实例独立的临时工作目录。
+3. `fork` 编译子进程，并通过 `execvp()` 执行 `g++`；编译器标准错误写入当前实例的 `compile.log`，编译失败输出 CE。
+4. 根据硬件并发度创建固定数量的 Worker 线程。多个 Worker 通过共享索引和 `std::mutex` 动态领取待评测测试点。
+5. 每个 Worker 为领取到的测试点创建独立实际输出文件和独立 cgroup。
+6. `fork` 创建评测子进程；子进程加入对应 cgroup，通过 `dup2()` 重定向输入输出，再通过 `execv()` 执行用户程序。
+7. 父进程使用 `waitpid(WNOHANG)` 轮询并检查 wall time；超时后通过 `cgroup.kill` 终止用户程序及其后代进程，再使用 `waitpid()` 回收直接子进程。若整组终止失败，则使用 `SIGKILL` 兜底终止直接子进程。
+8. 读取 `memory.events` 中的 `oom_kill` 和 `memory.peak`，用于 MLE 判定和峰值内存统计。
+9. 使用 `cgroup.kill` 清理残留后代进程，等待 `cgroup.events` 中 `populated 0` 后删除测试点对应的 cgroup。
+10. 无内部错误时，优先根据 OOM kill 判定 MLE，再根据超时标记和退出状态判定 TLE / RE。
+11. 正常退出且退出码为 0 时，使用内置 Checker 比较实际输出与标准答案，判定 AC / WA；Checker 自身失败时输出 `Judge failed`。
+12. Worker 完成所有测试点后，主线程等待所有 Worker 结束，并按照测试点顺序统一输出状态、运行时间和峰值内存。
 
-源码只编译一次，编译成功后依次运行全部测试点。内部运行或资源管理失败显示 `Run failed`。
+源码只编译一次，编译成功后由固定数量的 Worker 并行处理全部测试点。内部运行或资源管理失败显示 `Run failed`。
 
 运行时间为 Runner 从开始到返回的 wall time，包含控制组创建、等待和清理开销；内存为清理前读取的 cgroup 峰值，输出单位为 MiB。实现细节见 [学习笔记](notes/learning-notes.md)。
+
+## 并行性能测试
+
+为验证测试点并行调度效果，使用 55 个固定工作量的 CPU-bound 测试点进行本机测试。测试环境提供 20 个逻辑 CPU，每种模式运行 3 次，以下取中位数：
+
+| 调度方式 | Worker 数量 | real | user | sys |
+| --- | ---: | ---: | ---: | ---: |
+| 串行评测 | 1 | 35.619 s | 32.759 s | 0.841 s |
+| 无界并发 | 55 | 3.458 s | 42.136 s | 1.771 s |
+| 固定 Worker | 20 | 3.442 s | 41.150 s | 0.870 s |
+
+固定 Worker 相比串行评测将整批测试总耗时从约 `35.6 s` 降至 `3.44 s`，约为 `10.3×` 加速。
+
+与一个测试点创建一个线程的无界并发相比，固定 Worker 的整体吞吐基本不变，同时系统态 CPU 时间从约 `1.77 s` 降至 `0.87 s`，下降约 `51%`。
+
+无界并发还会使大量 CPU-bound 测试点同时竞争处理器，显著增加单个测试点的 wall time。固定 Worker 将活跃评测任务数量限制在接近硬件并发能力的范围内，在保持吞吐的同时减少额外调度竞争，并提高单测试点评测时间的稳定性。
+
+以上数据为当前开发环境下的本机测试结果，不代表不同硬件和系统环境下的固定性能。
 
 ## 输出示例
 
@@ -265,23 +293,21 @@ Test 1: Run failed (3.214 ms, 0.000 MiB)
 
 ## 临时文件
 
-编译日志：
+每个 MiniJudge 实例使用独立工作目录：
 
 ```text
-tmp/compile.log
+tmp/run-<pid>/
 ```
 
-实际输出：
+其中包含：
 
 ```text
-tmp/actual_<test_name>.out
+tmp/run-<pid>/compile.log
+tmp/run-<pid>/user_program
+tmp/run-<pid>/actual_<test_name>.out
 ```
 
-编译后的用户程序：
-
-```text
-tmp/user_program
-```
+正常评测结束后工作目录会被清理；部分异常退出场景下可能残留。
 
 ## 当前限制
 
@@ -291,6 +317,7 @@ tmp/user_program
 * 编译阶段仍通过外部 `g++` 命令完成
 * 尚未实现 CPU Time 限制
 * 当前进程数上限固定为 64，尚不支持通过命令行配置
+* 当前测试点并发数根据 `std::thread::hardware_concurrency()` 自动确定，尚不支持通过命令行手动指定 Worker 数量
 * 当前 cgroup delegation 依赖 `scripts/setup-cgroup.sh`；新 shell 会话运行 MiniJudge 前需要重新执行该脚本
 * 尚未实现完整 sandbox
 * 尚未实现其他系统资源限制
@@ -301,6 +328,7 @@ tmp/user_program
 
 * 完善 Runner 系统调用错误处理
 * 区分 wall time 与 CPU time
+* 进一步研究 CPU time 与 wall time 的限制模型，降低系统负载对 TLE 判定的影响
 * 增加 CPU time 等其他资源限制
 * 完善 cgroup 环境配置脚本的回滚、重复执行和错误处理
 * 减少对 Shell 命令的依赖

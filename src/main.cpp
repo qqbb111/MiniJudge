@@ -9,6 +9,8 @@
 #include <unistd.h> // getpid
 
 #include <thread>
+#include <mutex>
+#include <algorithm>
 
 #include "Compiler.h"
 #include "Runner.h"
@@ -142,17 +144,37 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
+    std::size_t nextIndex = 0;
+    std::mutex taskMutex;
+    std::vector<std::thread> workers;
     std::vector<TestResult> results(testNames.size());
-    std::vector<std::thread> threads;
 
-    for (std::size_t i = 0; i < testNames.size(); i++) {
-        threads.emplace_back([&, i]() { // 默认其他变量按引用捕获；i 按值捕获，每个线程保存自己的测试点下标
-            results[i] = judgeOneTest(testNames[i], testDir, workDir, exePath, timeLimitMs, memoryLimitMiB);
+    std::size_t workerCount = std::thread::hardware_concurrency();
+    if (workerCount == 0) workerCount = 4;
+    workerCount = std::min(workerCount, testNames.size());
+
+    // workerCount = 1; // 单线程
+    // workerCount = testNames.size(); // 无界并发
+
+    for (std::size_t i = 0; i < workerCount; i++) {
+        workers.emplace_back([&]() {
+            while (true) {
+                std::size_t testIndex;
+                {
+                    std::lock_guard<std::mutex> lock(taskMutex);
+                    if (nextIndex >= testNames.size()) break;
+                    testIndex = nextIndex;
+                    ++nextIndex;
+                }
+                results[testIndex] = judgeOneTest(testNames[testIndex], testDir, workDir, exePath, timeLimitMs, memoryLimitMiB);
+            }
         });
     }
-    for (std::thread &thread : threads) thread.join();
+
+    for (std::thread &worker : workers) worker.join();
     for (const TestResult &result : results)
-        std::cout << std::fixed << std::setprecision(3) << "Test " << result.name << ": " << result.verdict << " (" << result.timeUs / 1000.0 << " ms, " << result.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
+        std::cout << std::fixed << std::setprecision(3) << "Test " << result.name << ": " << result.verdict << " (" << result.timeUs / 1000.0 << " ms, " << result.memoryBytes / 1024.0 / 1024.0
+                  << " MiB)\n";
 
     std::error_code cleanupEc;
     fs::remove_all(workDir, cleanupEc);

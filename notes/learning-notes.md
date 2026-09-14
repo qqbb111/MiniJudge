@@ -2635,6 +2635,9 @@ pids.events: max > 0
 * 在手工委派的 cgroup 子树中运行
 * `cgroup.kill` 后代进程清理，等待 `populated 0` 后删除控制组
 * 使用主进程 PID 隔离每个实例的 cgroup 和 `tmp/run-<PID>/` 工作目录，支持并发运行
+* 多测试点并行评测
+* 固定 Worker 与共享索引动态调度
+* CMake 通过 `Threads::Threads` 声明线程依赖
 
 以上按当前源码整理，不代表本次文档更新重新运行了完整回归测试。
 
@@ -2645,8 +2648,11 @@ CLI：source_path / time limit / memory limit
 ↓
 发现并校验测试点 → Compiler → user_program
 ↓
-Runner（逐测试点）
-├─ 创建 `run-<PID>` cgroup，配置 memory.max / memory.swap.max / pids.max
+固定 Worker + 共享索引动态领取测试点
+↓
+Runner（每个测试点独立执行）
+├─ 创建 `run-<PID>-<test_name>` cgroup
+├─ 配置 memory.max / memory.swap.max / pids.max
 ├─ fork → 子进程加入 cgroup → dup2 → execv
 ├─ waitpid(WNOHANG)，检查超时和 CoreDumping
 ├─ 超时时 cgroup.kill，失败后 SIGKILL 兜底
@@ -2654,8 +2660,7 @@ Runner（逐测试点）
 ├─ cgroup.kill → 等待 populated 0 → 删除 cgroup
 └─ 返回状态、timeUs、memoryBytes
 ↓
-正常退出且退出码为 0 → Checker → AC / WA
-否则 → MLE / TLE / RE / Run failed
+所有 Worker join → 按测试点顺序统一输出结果
 ```
 
 # 当前限制
@@ -2668,6 +2673,7 @@ Runner（逐测试点）
 * OOM 事件和峰值内存在清理前读取，后代进程尚未全部停止时统计仍可能变化
 * Compiler 仍依赖外部 `g++` 命令
 * `Ctrl+C` 等外部信号中断时，正常 cleanup 可能来不及执行，临时 cgroup 和工作目录可能残留
+* Worker 数量根据 `std::thread::hardware_concurrency()` 自动确定，尚不支持通过命令行指定
 * 必须从项目根目录运行
 
 ---
@@ -2675,19 +2681,184 @@ Runner（逐测试点）
 # 当前唯一下一步
 
 ```text
-完成当前版本收尾，
-判断 MiniJudge 是否达到阶段性可投版本，
-再切换到 Linux Socket / 网络编程。
+进一步研究 CPU time 与 wall time 的限制模型，
+降低系统负载对 TLE 判定的影响。
 ```
 
 暂缓：
 
 ```text
 线程池
-并行评测
 Docker 沙箱
 Web 页面
 数据库
 分布式评测
 复杂设计模式
 ```
+
+---
+
+## 多线程并行评测与有界任务调度
+
+### 1. `std::thread`
+
+创建 `std::thread` 时线程就开始运行：
+
+```cpp
+std::thread t(work);
+t.join();
+```
+
+- `std::thread(...)`：创建并启动线程
+- `join()`：当前线程等待目标线程结束
+- 类似进程中的 `fork()` + `waitpid()` 的执行关系，但底层机制不同
+
+### 2. Lambda 捕获
+
+```cpp
+[&, i]() {
+    ...
+}
+```
+
+- `&`：其他外部变量按引用捕获
+- `i`：单独按值捕获
+
+循环变量 `i` 必须按值捕获，否则多个线程可能看到同一个不断变化的 `i`，导致访问错误的测试点。
+
+### 3. 数据竞争
+
+多个线程同时读写同一个共享对象且缺少同步，会产生 data race。
+
+例如共享：
+
+```cpp
+std::size_t nextIndex = 0;
+```
+
+多个线程同时执行：
+
+```cpp
+testIndex = nextIndex;
+++nextIndex;
+```
+
+可能领取到重复任务，因此必须使用 mutex 保护。
+
+### 4. Mutex 与临界区
+
+```cpp
+{
+    std::lock_guard<std::mutex> lock(taskMutex);
+
+    if (nextIndex >= testNames.size()) break;
+
+    testIndex = nextIndex;
+    ++nextIndex;
+}
+```
+
+`lock_guard` 创建时加锁，离开作用域时自动解锁。
+
+这里只锁“领取任务”：
+
+```text
+读取 nextIndex
+更新 nextIndex
+```
+
+真正耗时的：
+
+```cpp
+judgeOneTest(...)
+```
+
+必须放在锁外，否则多个 Worker 会重新退化成串行执行。
+
+### 5. 固定 Worker + 共享索引动态调度
+
+所有 testcase 在评测开始前已经确定，因此不需要额外维护 `std::queue`。
+
+当前模型：
+
+```text
+testNames:
+[0][1][2][3][4]...[N-1]
+       ↑
+   nextIndex
+```
+
+多个固定 Worker：
+
+1. 加锁领取 `nextIndex`
+2. `nextIndex++`
+3. 解锁
+4. 独立执行 testcase
+5. 完成后继续领取下一个 testcase
+
+谁先完成，谁继续领取任务，比提前静态分组更均衡。
+
+当前 Worker 数：
+
+```cpp
+workerCount = std::thread::hardware_concurrency();
+
+if (workerCount == 0)
+    workerCount = 4;
+
+workerCount = std::min(workerCount, testNames.size());
+```
+
+`hardware_concurrency()` 返回可用逻辑 CPU 数的建议值，也可能返回 0。
+
+### 6. 为什么不能一个 testcase 一个线程
+
+第一版并行实现为：
+
+```text
+N testcase
+→ N thread
+→ 最多同时 N 个用户程序
+```
+
+测试点数量增加后属于无界并发。
+
+55 个 TLE 测试点压力测试中，CPU 接近满载。由于当前 TLE 使用 wall time，大量程序同时争抢 CPU 后，每个程序真正获得的 CPU 时间减少，但 wall time 仍然继续增长，可能影响判时稳定性。
+
+因此目标是有界并发：在利用多核吞吐的同时限制活跃评测任务数量。
+
+### 7. Benchmark
+
+环境：
+
+- 20 个逻辑 CPU
+- 55 个固定工作量 CPU-bound testcase
+- 每种模式运行 3 次，取中位数
+
+| 模式 | real | user | sys |
+| --- | ---: | ---: | ---: |
+| 单 Worker | 35.619 s | 32.759 s | 0.841 s |
+| 无界并发 | 3.458 s | 42.136 s | 1.771 s |
+| 固定 20 Worker | 3.442 s | 41.150 s | 0.870 s |
+
+结论：
+
+- 固定 Worker 相比串行约 `10.3×` 加速；
+- 固定 Worker 与无界并发总耗时基本相同；
+- 相比无界并发，系统态 CPU 时间从 `1.771 s` 降至 `0.870 s`，下降约 `51%`；
+- 无界并发下单 testcase wall time 明显增大；
+- 固定 Worker 在保持吞吐的同时减少了额外调度竞争，并使单测试点运行时间更稳定。
+
+以上数据为当前开发环境下的本机测试结果，不代表不同硬件和系统环境下的固定性能。
+
+### 常见坑
+
+不要把 `judgeOneTest()` 放在 mutex 临界区中：
+
+```cpp
+// 错误思路
+std::lock_guard<std::mutex> lock(taskMutex);
+results[index] = judgeOneTest(...);
+```
+
+这样所有 Worker 会因为同一把锁重新串行执行。
