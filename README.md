@@ -38,7 +38,7 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * 通过 `memory.peak` 统计测试点峰值内存
 * 使用 `cgroup.kill` 清理残留后代进程，等待 `populated 0` 后删除控制组
 * 基于 cgroup v2 统计测试点 CPU 时间与峰值内存
-* 使用 `cpu.stat::usage_usec` 实现 CPU Time Limit，统计测试程序及其后代进程的累计 CPU 消耗
+* 使用 `cpu.stat` 中的 `usage_usec` 实现 CPU Time Limit，统计测试程序及其后代进程的累计 CPU 消耗
 * 保留 Wall Time Watchdog，防止 `sleep`、阻塞等低 CPU 占用程序长期挂起
 * 内置输出比较器：忽略空行和行末空白，其余内容逐字符比较
 * 使用 CMake 管理项目构建，并通过 `Threads::Threads` 声明线程依赖
@@ -55,6 +55,8 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * `Judge failed`：Checker 读取实际输出或标准答案失败
 
 ## 项目结构
+
+主要目录结构如下，部分示例程序和辅助脚本未列出：
 
 ```text
 MiniJudge/
@@ -90,7 +92,7 @@ MiniJudge/
 模块职责：
 
 * `Compiler`：编译待评测源码
-* `Runner`：创建评测进程、重定向输入输出、统计运行时间和内存并判断运行状态
+* `Runner`：创建评测进程、重定向输入输出、监控 CPU 时间与 Wall Time watchdog，并组织运行状态判定
 * `Cgroup`：配置内存限制、加入控制组、读取资源统计并清理后代进程
 * `Checker`：比较实际输出与标准答案
 * `TestCasesFinder`：发现并校验测试数据
@@ -243,7 +245,7 @@ A-Z  a-z  0-9  _  -  #  .
 5. 每个 Worker 为领取到的测试点创建独立实际输出文件和独立 cgroup。
 6. `fork` 创建评测子进程；子进程加入对应 cgroup，通过 `dup2()` 重定向输入输出，再通过 `execv()` 执行用户程序。
 7. 父进程使用 `waitpid(WNOHANG)` 轮询，并检查 cgroup `cpu.stat` 中的累计 CPU 时间与 Wall Time watchdog；超时后通过 `cgroup.kill` 终止用户程序及其后代进程，再使用 `waitpid()` 回收直接子进程。若整组终止失败，则使用 `SIGKILL` 兜底终止直接子进程。
-8. 读取 `cpu.stat`、`memory.events` 中的 `oom_kill` 和 `memory.peak`，用于 CPU 时间统计、MLE 判定和峰值内存统计。
+8. 运行过程中周期性读取 `cpu.stat` 中的 `usage_usec` 进行 CPU Time Limit 判定；测试点结束后读取 `memory.events` 中的 `oom_kill` 和 `memory.peak`，用于 MLE 判定和峰值内存统计。
 9. 使用 `cgroup.kill` 清理残留后代进程，等待 `cgroup.events` 中 `populated 0` 后删除测试点对应的 cgroup。
 10. 无内部错误时，优先根据 OOM kill 判定 MLE，再根据 CPU / Wall 超时标记和退出状态判定 TLE / RE。
 11. 正常退出且退出码为 0 时，使用内置 Checker 比较实际输出与标准答案，判定 AC / WA；Checker 自身失败时输出 `Judge failed`。
@@ -326,19 +328,18 @@ tmp/run-<pid>/actual_<test_name>.out
 * 必须从项目根目录运行
 * 测试结果显示 cgroup 累计 CPU 时间；Wall Time 仅作为 CPU Time Limit 3 倍的 watchdog
 * core dump 处理可能导致 RE 返回明显变慢
-* 编译阶段仍通过外部 `g++` 命令完成
+* 编译功能依赖系统提供的 `g++`
 * 当前进程数上限固定为 64，尚不支持通过命令行配置
 * 当前测试点并发数根据 `std::thread::hardware_concurrency()` 自动确定，尚不支持通过命令行手动指定 Worker 数量
 * 当前 cgroup delegation 依赖 `scripts/setup-cgroup.sh`；新 shell 会话运行 MiniJudge 前需要重新执行该脚本
 * 尚未实现完整 sandbox
-* 尚未实现其他系统资源限制
+* 尚未限制输出文件大小、打开文件数等其他系统资源
 * 当前进程被 `Ctrl+C` 等外部信号中断时，正常 cleanup 可能来不及执行，临时 cgroup 和工作目录可能残留
-* 测试点按照字符串字典序运行
+* 测试结果按照测试点名称顺序统一输出；实际执行顺序由 Worker 动态调度决定
 
 ## 后续计划
 
 * 完善 Runner 系统调用错误处理
-* 进一步完善 CPU time 与 wall time watchdog 的边界处理，降低系统负载对 TLE 判定的影响
+* 优化短时间限制下的 CPU 时间采样精度与 Wall Time Watchdog 边界行为
 * 完善 cgroup 环境配置脚本的回滚、重复执行和错误处理
-* 减少对 Shell 命令的依赖
 * 完善测试集与项目文档
