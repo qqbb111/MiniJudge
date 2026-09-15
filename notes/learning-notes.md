@@ -1334,7 +1334,7 @@ timeUs / 1000.0
 
 ## 47. Wall Time
 
-当前 MiniJudge 使用的是 wall time：
+Wall Time 表示：
 
 ```text
 现实世界从开始到结束经过的时间
@@ -1349,7 +1349,7 @@ timeUs / 1000.0
 虚拟机未获得 CPU 的时间
 ```
 
-因此会受到：
+它会受到：
 
 ```text
 系统负载
@@ -1357,9 +1357,7 @@ CPU 降频
 虚拟机调度
 ```
 
-影响。
-
-后续可考虑 CPU time 与 wall time 分开限制。
+影响。当前 MiniJudge 使用 cgroup CPU Time 作为主要限制，Wall Time 只作为 watchdog。
 
 ---
 
@@ -1372,7 +1370,7 @@ waitpid(WNOHANG)
 ↓
 仍在运行
 ↓
-检查 elapsed time
+读取 cgroup CPU time 和 Wall Time watchdog
 ↓
 超过限制
 ↓
@@ -2629,7 +2627,7 @@ pids.events: max > 0
 * Core Dump 期间 RE/TLE 误判处理
 * `-t / --time-limit`，默认 1000 ms
 * `-m / --memory-limit`，默认 64 MiB
-* cgroup v2 内存限制、禁用 swap 和进程数限制
+* cgroup v2 CPU 时间限制、内存限制、禁用 swap 和进程数限制
 * `memory.events` OOM 检测、`memory.peak` 峰值内存统计
 * 内置 Checker：忽略空行和行末空白，其余内容逐字符比较
 * 在手工委派的 cgroup 子树中运行
@@ -2654,7 +2652,7 @@ Runner（每个测试点独立执行）
 ├─ 创建 `run-<PID>-<test_name>` cgroup
 ├─ 配置 memory.max / memory.swap.max / pids.max
 ├─ fork → 子进程加入 cgroup → dup2 → execv
-├─ waitpid(WNOHANG)，检查超时和 CoreDumping
+├─ waitpid(WNOHANG)，读取 `cpu.stat::usage_usec` 并检查 Wall Time watchdog 和 CoreDumping
 ├─ 超时时 cgroup.kill，失败后 SIGKILL 兜底
 ├─ 读取 oom_kill / memory.peak
 ├─ cgroup.kill → 等待 populated 0 → 删除 cgroup
@@ -2667,8 +2665,8 @@ Runner（每个测试点独立执行）
 
 * cgroup delegation 仍需要先执行 `scripts/setup-cgroup.sh`，脚本的重复执行和失败回滚仍需完善
 * 尚未实现完整 sandbox 和其他系统资源限制
-* 使用 wall time，包含 Runner 的创建、等待和清理开销，受机器负载和虚拟机调度影响
-* 尚未限制 CPU time；core dump 可能导致 RE 返回较慢
+* 测试结果使用 cgroup 累计 CPU time；Wall Time 仅作为 CPU Time Limit 3 倍的 watchdog
+* core dump 可能导致 RE 返回较慢
 * `killCgroup()` 等待 `populated 0` 暂无超时上限，异常路径清理仍需完善
 * OOM 事件和峰值内存在清理前读取，后代进程尚未全部停止时统计仍可能变化
 * Compiler 仍依赖外部 `g++` 命令
@@ -2681,14 +2679,13 @@ Runner（每个测试点独立执行）
 # 当前唯一下一步
 
 ```text
-进一步研究 CPU time 与 wall time 的限制模型，
+进一步完善 CPU time 与 wall time watchdog 的边界处理，
 降低系统负载对 TLE 判定的影响。
 ```
 
 暂缓：
 
 ```text
-线程池
 Docker 沙箱
 Web 页面
 数据库
@@ -2823,7 +2820,7 @@ N testcase
 
 测试点数量增加后属于无界并发。
 
-55 个 TLE 测试点压力测试中，CPU 接近满载。由于当前 TLE 使用 wall time，大量程序同时争抢 CPU 后，每个程序真正获得的 CPU 时间减少，但 wall time 仍然继续增长，可能影响判时稳定性。
+55 个 TLE 测试点压力测试中，CPU 接近满载。此前使用 wall time 判 TLE 时，大量程序同时争抢 CPU 会使 wall time 继续增长，可能影响判时稳定性；当前实现改用 cgroup CPU time，并保留 Wall Time watchdog。
 
 因此目标是有界并发：在利用多核吞吐的同时限制活跃评测任务数量。
 
@@ -2862,3 +2859,94 @@ results[index] = judgeOneTest(...);
 ```
 
 这样所有 Worker 会因为同一把锁重新串行执行。
+
+---
+
+## CPU Time 与 Wall Time
+
+### 1. 区别
+
+- Wall Time：从程序开始到结束经过的现实时间，包括运行、等待 CPU、sleep、I/O 等。
+- CPU Time：程序真正占用 CPU 执行的累计时间。
+
+例如：
+
+```cpp
+while (true);   // CPU Time 持续增长
+sleep(10);      // Wall Time 增长约 10s，CPU Time 几乎不增长
+```
+
+并发评测时，如果多个测试程序竞争 CPU，Wall Time 会因为等待调度而增加，因此直接使用 Wall Time 判 TLE 可能误伤测试程序。
+
+### 2. cgroup v2 的 CPU 统计
+
+`cpu.stat`：
+
+```text
+usage_usec 1003867
+user_usec  995000
+system_usec 8867
+```
+
+- `usage_usec`：总 CPU 时间；
+- `user_usec`：用户态 CPU 时间；
+- `system_usec`：内核态 CPU 时间。
+
+MiniJudge 使用 `usage_usec`，因为系统调用产生的内核 CPU 消耗也应计入限制。
+
+cgroup 的统计覆盖其中所有进程，因此用户程序 `fork()` 出来的后代进程消耗也会累计，不能通过创建多个进程绕过 CPU 限制。
+
+### 3. CPU Limit + Wall Watchdog
+
+只使用 CPU Time 有一个问题：
+
+```bash
+while (true) sleep(1);
+```
+
+程序可能永久运行，但几乎不消耗 CPU。
+
+因此当前采用：
+
+```text
+CPU Time Limit = -t 指定时间
+Wall Watchdog  = CPU Time Limit × 3
+```
+
+CPU Time 是主要判时依据，Wall Time 只用于防止 sleep、阻塞等程序长期挂起。
+
+### 4. TLE 判定与 SIGKILL 分离
+
+超限原因和终止方式是两个概念：
+
+```text
+CPU / Wall 超限
+    ↓
+记录 timeOut = true
+    ↓
+kill cgroup
+    ↓
+waitpid 回收直接子进程
+```
+
+因此最终是否 TLE 应由 `timeOut` 决定，而不是依赖最终是否观察到 `SIGKILL`。
+
+### 5. 实验结果
+
+20 Worker 并发运行 CPU-bound 程序，`-t 1000`：
+
+```text
+TLE ≈ 1000~1008 ms CPU
+```
+
+旧的 Wall Time 判时在高负载时可能在程序仅获得约 850~950 ms CPU 时就触发 TLE。
+
+`sleep` 程序在 `-t 1000` 时：
+
+```text
+CPU Time ≈ 1~3 ms
+Wall Time ≈ 3000 ms
+→ Wall Watchdog TLE
+```
+
+说明两种限制分别解决不同问题。

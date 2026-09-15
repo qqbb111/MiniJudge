@@ -4,7 +4,7 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 
 > 🌾 **100% 古法编程** · 手搓 · 手调 · 手测 ( •̀ ω •́ )✧
 
-支持编译待评测源码、自动发现测试点、多测试点并行评测、输入输出重定向、运行时间与峰值内存统计，以及 AC、WA、CE、RE、TLE、MLE 判定。
+支持编译待评测源码、自动发现测试点、多测试点并行评测、输入输出重定向、CPU 时间与峰值内存统计，以及 AC、WA、CE、RE、TLE、MLE 判定。
 
 ## 当前功能
 
@@ -37,7 +37,9 @@ MiniJudge 是一个运行在 Linux 环境下的轻量级本地 C++ 代码评测�
 * 通过 `memory.events` 的 `oom_kill` 判断 MLE
 * 通过 `memory.peak` 统计测试点峰值内存
 * 使用 `cgroup.kill` 清理残留后代进程，等待 `populated 0` 后删除控制组
-* 统计每个测试点运行时间和峰值内存
+* 基于 cgroup v2 统计测试点 CPU 时间与峰值内存
+* 使用 `cpu.stat::usage_usec` 实现 CPU Time Limit，统计测试程序及其后代进程的累计 CPU 消耗
+* 保留 Wall Time Watchdog，防止 `sleep`、阻塞等低 CPU 占用程序长期挂起
 * 内置输出比较器：忽略空行和行末空白，其余内容逐字符比较
 * 使用 CMake 管理项目构建，并通过 `Threads::Threads` 声明线程依赖
 
@@ -106,7 +108,7 @@ MiniJudge/
 
 运行前需要为当前用户配置可管理的 `/sys/fs/cgroup/minijudge/` 子树，并在该层启用 memory 和 pids controller。评测程序以普通用户身份运行，不能用 `sudo` 启动评测程序。
 
-仓库提供 cgroup 环境配置脚本。脚本会检查 cgroup v2 和 memory controller，创建 `minijudge/manager`，启用 memory 和 pids controller，并将当前 shell 加入 `/sys/fs/cgroup/minijudge/manager`：
+仓库提供 cgroup 环境配置脚本。脚本会检查 cgroup v2 以及 memory 和 pids controller，创建 `minijudge/manager`，启用 memory 和 pids controller，并将当前 shell 加入 `/sys/fs/cgroup/minijudge/manager`：
 
 ```bash
 ./scripts/setup-cgroup.sh
@@ -193,12 +195,14 @@ cmake --build build
 参数说明：
 
 ```text
--t, --time-limit <ms>      时间限制，单位 ms，默认 1000
+-t, --time-limit <ms>      CPU 时间限制，单位 ms，默认 1000
 -m, --memory-limit <MiB>   内存限制，单位 MiB，默认 64
 -h, --help                显示帮助信息
 ```
 
 时间限制和内存限制必须为正整数。非法参数、缺少源码路径或提供多个源码路径时，程序会输出错误并退出。
+
+测试结果中显示的运行时间为测试程序所在 cgroup 的累计 CPU 时间。Wall Time 仅作为内部 watchdog，目前上限为 CPU Time Limit 的 3 倍。
 
 当前版本使用相对路径访问 `tests/` 和 `tmp/`，因此需要从项目根目录启动。
 
@@ -238,16 +242,24 @@ A-Z  a-z  0-9  _  -  #  .
 4. 根据硬件并发度创建固定数量的 Worker 线程。多个 Worker 通过共享索引和 `std::mutex` 动态领取待评测测试点。
 5. 每个 Worker 为领取到的测试点创建独立实际输出文件和独立 cgroup。
 6. `fork` 创建评测子进程；子进程加入对应 cgroup，通过 `dup2()` 重定向输入输出，再通过 `execv()` 执行用户程序。
-7. 父进程使用 `waitpid(WNOHANG)` 轮询并检查 wall time；超时后通过 `cgroup.kill` 终止用户程序及其后代进程，再使用 `waitpid()` 回收直接子进程。若整组终止失败，则使用 `SIGKILL` 兜底终止直接子进程。
-8. 读取 `memory.events` 中的 `oom_kill` 和 `memory.peak`，用于 MLE 判定和峰值内存统计。
+7. 父进程使用 `waitpid(WNOHANG)` 轮询，并检查 cgroup `cpu.stat` 中的累计 CPU 时间与 Wall Time watchdog；超时后通过 `cgroup.kill` 终止用户程序及其后代进程，再使用 `waitpid()` 回收直接子进程。若整组终止失败，则使用 `SIGKILL` 兜底终止直接子进程。
+8. 读取 `cpu.stat`、`memory.events` 中的 `oom_kill` 和 `memory.peak`，用于 CPU 时间统计、MLE 判定和峰值内存统计。
 9. 使用 `cgroup.kill` 清理残留后代进程，等待 `cgroup.events` 中 `populated 0` 后删除测试点对应的 cgroup。
-10. 无内部错误时，优先根据 OOM kill 判定 MLE，再根据超时标记和退出状态判定 TLE / RE。
+10. 无内部错误时，优先根据 OOM kill 判定 MLE，再根据 CPU / Wall 超时标记和退出状态判定 TLE / RE。
 11. 正常退出且退出码为 0 时，使用内置 Checker 比较实际输出与标准答案，判定 AC / WA；Checker 自身失败时输出 `Judge failed`。
 12. Worker 完成所有测试点后，主线程等待所有 Worker 结束，并按照测试点顺序统一输出状态、运行时间和峰值内存。
 
 源码只编译一次，编译成功后由固定数量的 Worker 并行处理全部测试点。内部运行或资源管理失败显示 `Run failed`。
 
-运行时间为 Runner 从开始到返回的 wall time，包含控制组创建、等待和清理开销；内存为清理前读取的 cgroup 峰值，输出单位为 MiB。实现细节见 [学习笔记](notes/learning-notes.md)。
+测试结果中的运行时间为测试程序所在 cgroup 的累计 CPU 时间，内存为清理前读取的 cgroup 峰值，输出单位为 MiB。实现细节见 [学习笔记](notes/learning-notes.md)。
+
+### 运行与资源限制
+
+每个测试点使用独立 cgroup。运行过程中 MiniJudge 周期性读取 `cpu.stat` 中的 `usage_usec`，统计测试程序及其后代进程的累计 CPU 时间。
+
+当 CPU 时间超过 `-t` 指定的限制时判定 TLE。同时保留 3 倍时间限制的 Wall Time Watchdog，用于终止 `sleep`、阻塞或其他几乎不消耗 CPU 但长期不退出的程序。
+
+测试结果中的时间为 CPU 时间，而非墙钟时间。
 
 ## 并行性能测试
 
@@ -312,10 +324,9 @@ tmp/run-<pid>/actual_<test_name>.out
 ## 当前限制
 
 * 必须从项目根目录运行
-* 当前运行时间为 wall time，会受到系统负载、调度和虚拟机环境影响
+* 测试结果显示 cgroup 累计 CPU 时间；Wall Time 仅作为 CPU Time Limit 3 倍的 watchdog
 * core dump 处理可能导致 RE 返回明显变慢
 * 编译阶段仍通过外部 `g++` 命令完成
-* 尚未实现 CPU Time 限制
 * 当前进程数上限固定为 64，尚不支持通过命令行配置
 * 当前测试点并发数根据 `std::thread::hardware_concurrency()` 自动确定，尚不支持通过命令行手动指定 Worker 数量
 * 当前 cgroup delegation 依赖 `scripts/setup-cgroup.sh`；新 shell 会话运行 MiniJudge 前需要重新执行该脚本
@@ -327,9 +338,7 @@ tmp/run-<pid>/actual_<test_name>.out
 ## 后续计划
 
 * 完善 Runner 系统调用错误处理
-* 区分 wall time 与 CPU time
-* 进一步研究 CPU time 与 wall time 的限制模型，降低系统负载对 TLE 判定的影响
-* 增加 CPU time 等其他资源限制
+* 进一步完善 CPU time 与 wall time watchdog 的边界处理，降低系统负载对 TLE 判定的影响
 * 完善 cgroup 环境配置脚本的回滚、重复执行和错误处理
 * 减少对 Shell 命令的依赖
 * 完善测试集与项目文档

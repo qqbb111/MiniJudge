@@ -128,8 +128,8 @@ bool killCgroup(const std::string &path) {
     }
 }
 
-bool readOomKillCount(const std::string &path, long long &count) {
-    fs::path eventsPath = fs::path(path) / "memory.events";
+bool readOomKillCount(const std::string &cgroupPath, long long &count) {
+    fs::path eventsPath = fs::path(cgroupPath) / "memory.events";
     std::ifstream file(eventsPath);
 
     if (!file) {
@@ -151,8 +151,8 @@ bool readOomKillCount(const std::string &path, long long &count) {
     return false;
 }
 
-bool readMemoryPeak(const std::string &path, long long &peakBytes) {
-    fs::path peakPath = fs::path(path) / "memory.peak";
+bool readMemoryPeak(const std::string &cgroupPath, long long &peakBytes) {
+    fs::path peakPath = fs::path(cgroupPath) / "memory.peak";
     std::ifstream file(peakPath);
 
     if (!file) {
@@ -168,6 +168,29 @@ bool readMemoryPeak(const std::string &path, long long &peakBytes) {
     }
 
     return true;
+}
+
+bool readCpuUsage(const std::string &cgroupPath, long long &usageUsec) {
+    fs::path cpuStatPath = fs::path(cgroupPath) / "cpu.stat";
+    std::ifstream file(cpuStatPath);
+
+    if (!file) {
+        std::cerr << "Failed to open cpu.stat: " << cpuStatPath << '\n';
+        return false;
+    }
+
+    std::string key;
+    long long value;
+
+    while (file >> key >> value) {
+        if (key == "usage_usec") {
+            usageUsec = value;
+            return true;
+        }
+    }
+
+    std::cerr << "Failed to find usage_usec in cpu.stat: " << cpuStatPath << '\n';
+    return false;
 }
 
 bool removeCgroup(const std::string &path) {
