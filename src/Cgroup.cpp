@@ -98,7 +98,7 @@ bool killCgroup(const std::string &path) {
         return false;
     }
 
-    while (true) { // ?
+    while (true) { // 轮询等待 cgroup 中所有进程退出（populated 变为 0）
         std::ifstream eventsFile(eventsPath);
         if (!eventsFile) {
             std::cerr << "Failed to open cgroup.events: " << eventsPath << '\n';
