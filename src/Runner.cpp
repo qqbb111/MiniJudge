@@ -1,5 +1,6 @@
 #include "Runner.h"
 #include "Cgroup.h"
+#include "Checker.h"
 
 #include <string>
 #include <chrono>
@@ -26,7 +27,8 @@ bool isCoreDumping(pid_t pid) {
     return false;
 }
 
-RunResult run(const std::string &exePath, const std::string &inputPath, const std::string &actualOutputPath, const std::string &cgroupPath, long long timeLimitMs, long long memoryLimitMiB) {
+RunResult run(const std::string &exePath, const std::string &inputPath, const std::string &actualOutputPath, const std::string &expectedPath, const std::string &cgroupPath, long long timeLimitMs,
+              long long memoryLimitMiB) {
     auto start = std::chrono::steady_clock::now();
     auto getElapsedUs = [&start]() { return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); };
 
@@ -36,13 +38,13 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
     if (pipe2(pipeFd, O_CLOEXEC) == -1) { /* 如果不用 pipe2 的 O_CLOEXEC 参数（Close On Exec），保证 execv 成功后自动关闭管道写端，避免用户程序及其后代继承该
                                             fd，（用户代码可以继续继承子进程的文件描述符表，往管道里写入东西，导致 Run Failed）*/
         std::perror("pipe");
-        return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
+        return {RunStatus::InternalError, "", getElapsedUs(), peakMemoryBytes};
     }
 
     if (!createCgroup(cgroupPath, memoryLimitMiB * 1024LL * 1024)) {
         close(pipeFd[0]);
         close(pipeFd[1]);
-        return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
+        return {RunStatus::InternalError, "", getElapsedUs(), peakMemoryBytes};
     }
 
     std::string cgroupProcsPath = cgroupPath + "/cgroup.procs";
@@ -53,7 +55,7 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
         close(pipeFd[0]);
         close(pipeFd[1]);
         removeCgroup(cgroupPath);
-        return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
+        return {RunStatus::InternalError, "", getElapsedUs(), peakMemoryBytes};
     }
 
     if (pid == 0) {
@@ -109,7 +111,7 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
             close(pipeFd[0]);
             terminateAndReap();
             removeCgroup(cgroupPath);
-            return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
+            return {RunStatus::InternalError, "", getElapsedUs(), peakMemoryBytes};
         }
 
         coreDump = coreDump || isCoreDumping(pid); // C++短路，一旦检测到 CoreDumping，保持状态。
@@ -118,7 +120,7 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
             close(pipeFd[0]);
             terminateAndReap();
             removeCgroup(cgroupPath);
-            return {RunStatus::InternalError, getElapsedUs(), peakMemoryBytes};
+            return {RunStatus::InternalError, "", getElapsedUs(), peakMemoryBytes};
         }
 
         if (waitpidResult > 0) {
@@ -133,7 +135,7 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
             timeOut = true;
             if (!terminateAndReap()) {
                 removeCgroup(cgroupPath);
-                return {RunStatus::InternalError, cpuUsageUs, peakMemoryBytes};
+                return {RunStatus::InternalError, "", cpuUsageUs, peakMemoryBytes};
             }
             break;
         }
@@ -150,7 +152,7 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
         std::perror("read");
         killCgroup(cgroupPath);
         removeCgroup(cgroupPath);
-        return {RunStatus::InternalError, cpuUsageUs, peakMemoryBytes};
+        return {RunStatus::InternalError, "", cpuUsageUs, peakMemoryBytes};
     }
 
     long long oomCnt = 0ll;
@@ -158,48 +160,51 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
     if (!readOomKillCount(cgroupPath, oomCnt)) {
         killCgroup(cgroupPath);
         removeCgroup(cgroupPath);
-        return {RunStatus::InternalError, cpuUsageUs, peakMemoryBytes};
+        return {RunStatus::InternalError, "", cpuUsageUs, peakMemoryBytes};
     }
 
     if (!readMemoryPeak(cgroupPath, peakMemoryBytes)) {
         killCgroup(cgroupPath);
         removeCgroup(cgroupPath);
-        return {RunStatus::InternalError, cpuUsageUs, peakMemoryBytes};
+        return {RunStatus::InternalError, "", cpuUsageUs, peakMemoryBytes};
     }
 
     if (!killCgroup(cgroupPath)) {
         removeCgroup(cgroupPath);
-        return {RunStatus::InternalError, cpuUsageUs, peakMemoryBytes};
+        return {RunStatus::InternalError, "", cpuUsageUs, peakMemoryBytes};
     }
 
     if (!removeCgroup(cgroupPath)) {
-        return {RunStatus::InternalError, cpuUsageUs, peakMemoryBytes};
+        return {RunStatus::InternalError, "", cpuUsageUs, peakMemoryBytes};
     }
 
     // byteRead > 0 表示子进程在 exec 前发生 MiniJudge 内部错误
     if (byteRead > 0) {
-        return {RunStatus::InternalError, cpuUsageUs, 0ll};
+        return {RunStatus::InternalError, "", cpuUsageUs, 0ll};
     }
 
     if (oomCnt > 0) {
-        return {RunStatus::MemoryLimitExceeded, cpuUsageUs, peakMemoryBytes};
+        return {RunStatus::MemoryLimitExceeded, "", cpuUsageUs, peakMemoryBytes};
     }
 
     if (timeOut) {
-        return {RunStatus::TimeLimitExceeded, cpuUsageUs, peakMemoryBytes};
+        return {RunStatus::TimeLimitExceeded, "", cpuUsageUs, peakMemoryBytes};
     }
 
     if (WIFSIGNALED(sta)) {
-        return {RunStatus::RuntimeError, cpuUsageUs, peakMemoryBytes};
+        return {RunStatus::RuntimeError, "", cpuUsageUs, peakMemoryBytes};
     }
 
     // 只剩下用户代码正常退出的情况了，那就看 return 的值（也就是退出码）是不是 0 了。是 0 就 OK，否则 RE
     if (WIFEXITED(sta) && (WEXITSTATUS(sta) != 0)) { // 进程正常退出，但退出码非 0;
-        return {RunStatus::RuntimeError, cpuUsageUs, peakMemoryBytes};
+        return {RunStatus::RuntimeError, "", cpuUsageUs, peakMemoryBytes};
     }
     if (WIFEXITED(sta) && (WEXITSTATUS(sta) == 0)) {
-        return {RunStatus::Ok, cpuUsageUs, peakMemoryBytes};
+        RunResult compareResult = compare(actualOutputPath, expectedPath);
+        compareResult.memoryBytes = peakMemoryBytes;
+        compareResult.timeUs = cpuUsageUs;
+        return compareResult;
     }
 
-    return {RunStatus::InternalError, cpuUsageUs, peakMemoryBytes};
+    return {RunStatus::InternalError, "", cpuUsageUs, peakMemoryBytes};
 }

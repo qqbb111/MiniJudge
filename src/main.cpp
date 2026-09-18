@@ -20,10 +20,8 @@
 namespace fs = std::filesystem;
 
 struct TestResult {
-    std::string name;
-    std::string verdict;
-    long long timeUs;
-    long long memoryBytes;
+    std::string name, verdict, detail;
+    long long timeUs, memoryBytes;
 };
 
 TestResult judgeOneTest(const std::string &name, const fs::path &testDir, const fs::path &workDir, const fs::path &exePath, long long timeLimitMs, long long memoryLimitMiB) {
@@ -32,37 +30,28 @@ TestResult judgeOneTest(const std::string &name, const fs::path &testDir, const 
     fs::path actualOutput = workDir / ("actual_" + name + ".out");
     fs::path cgroupPath = fs::path("/sys/fs/cgroup/minijudge") / ("run-" + std::to_string(getpid()) + "-" + name);
 
-    RunResult runResult = run(exePath.string(), input.string(), actualOutput.string(), cgroupPath.string(), timeLimitMs, memoryLimitMiB);
+    RunResult runResult = run(exePath.string(), input.string(), actualOutput.string(), expected.string(), cgroupPath.string(), timeLimitMs, memoryLimitMiB);
     switch (runResult.status) {
         case RunStatus::RuntimeError:
-            return {name, "RE", runResult.timeUs, runResult.memoryBytes};
+            return {name, "RE", runResult.detail, runResult.timeUs, runResult.memoryBytes};
 
         case RunStatus::TimeLimitExceeded:
-            return {name, "TLE", runResult.timeUs, runResult.memoryBytes};
+            return {name, "TLE", runResult.detail, runResult.timeUs, runResult.memoryBytes};
 
         case RunStatus::MemoryLimitExceeded:
-            return {name, "MLE", runResult.timeUs, runResult.memoryBytes};
+            return {name, "MLE", runResult.detail, runResult.timeUs, runResult.memoryBytes};
 
         case RunStatus::InternalError:
-            return {name, "Run failed", runResult.timeUs, runResult.memoryBytes};
+            return {name, "Run failed", runResult.detail, runResult.timeUs, runResult.memoryBytes};
 
-        case RunStatus::Ok:
-            break;
+        case RunStatus::Accepted:
+            return {name, "AC", runResult.detail, runResult.timeUs, runResult.memoryBytes};
+
+        case RunStatus::WrongAnswer:
+            return {name, "WA", runResult.detail, runResult.timeUs, runResult.memoryBytes};
     }
 
-    CompareResult compareResult = compare(actualOutput.string(), expected.string());
-    switch (compareResult) {
-        case CompareResult::Accepted:
-            return {name, "AC", runResult.timeUs, runResult.memoryBytes};
-
-        case CompareResult::WrongAnswer:
-            return {name, "WA", runResult.timeUs, runResult.memoryBytes};
-
-        case CompareResult::Error:
-            return {name, "Judge failed", runResult.timeUs, runResult.memoryBytes};
-    }
-
-    return {name, "Judge failed", runResult.timeUs, runResult.memoryBytes};
+    return {name, "Run failed", runResult.detail, runResult.timeUs, runResult.memoryBytes};
 }
 
 const char *shortOptions = "t:m:h";
@@ -172,9 +161,11 @@ int main(int argc, char *argv[]) {
     }
 
     for (std::thread &worker : workers) worker.join();
-    for (const TestResult &result : results)
+    for (const TestResult &result : results) {
         std::cout << std::fixed << std::setprecision(3) << "Test " << result.name << ": " << result.verdict << " (" << result.timeUs / 1000.0 << " ms, " << result.memoryBytes / 1024.0 / 1024.0
                   << " MiB)\n";
+        if (!result.detail.empty()) std::cout << result.detail << '\n';
+    }
 
     std::error_code cleanupEc;
     fs::remove_all(workDir, cleanupEc);

@@ -1,4 +1,5 @@
 #include "Checker.h"
+#include "Runner.h"
 
 #include <fstream>
 #include <string>
@@ -22,12 +23,24 @@ bool readOutput(const std::string &path, std::vector<std::string> &lines) {
     return true;
 }
 
-CompareResult compare(const std::string &actualPath, const std::string &expectedPath) {
+RunResult compare(const std::string &actualPath, const std::string &expectedPath) {
     std::vector<std::string> actualLines;
     std::vector<std::string> expectedLines;
 
-    if (!readOutput(actualPath, actualLines)) return CompareResult::Error;
-    if (!readOutput(expectedPath, expectedLines)) return CompareResult::Error;
-    if (actualLines == expectedLines) return CompareResult::Accepted;
-    return CompareResult::WrongAnswer;
+    if (!readOutput(actualPath, actualLines)) return {RunStatus::InternalError, "", 0, 0};
+    if (!readOutput(expectedPath, expectedLines)) return {RunStatus::InternalError, "", 0, 0};
+
+    size_t n = std::min(actualLines.size(), expectedLines.size());
+
+    for (size_t i = 0; i < n; ++i) {
+        if (actualLines[i] != expectedLines[i]) {
+            return {RunStatus::WrongAnswer, "line " + std::to_string(i + 1) + "\nexpected: " + expectedLines[i] + "\nactual  : " + actualLines[i], 0, 0};
+        }
+    }
+
+    if (actualLines.size() != expectedLines.size()) {
+        return {RunStatus::WrongAnswer, "line count differs", 0, 0};
+    }
+
+    return {RunStatus::Accepted, "", 0, 0};
 }

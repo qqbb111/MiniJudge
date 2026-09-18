@@ -1,6 +1,5 @@
 #pragma once
 #include <string>
+#include "Runner.h"
 
-enum class CompareResult { Accepted, WrongAnswer, Error };
-
-CompareResult compare(const std::string &actualPath, const std::string &expectedPath);
+RunResult compare(const std::string &actualPath, const std::string &expectedPath);
