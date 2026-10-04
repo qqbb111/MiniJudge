@@ -1,5 +1,6 @@
 #include "Checker.h"
 
+#include <algorithm> // min
 #include <fstream>
 #include <string>
 #include <vector>
@@ -26,8 +27,22 @@ CompareResult compare(const std::string &actualPath, const std::string &expected
     std::vector<std::string> actualLines;
     std::vector<std::string> expectedLines;
 
-    if (!readOutput(actualPath, actualLines)) return CompareResult::Error;
-    if (!readOutput(expectedPath, expectedLines)) return CompareResult::Error;
-    if (actualLines == expectedLines) return CompareResult::Accepted;
-    return CompareResult::WrongAnswer;
+    if (!readOutput(actualPath, actualLines)) return {CompareStatus::Error};
+    if (!readOutput(expectedPath, expectedLines)) return {CompareStatus::Error};
+    if (actualLines == expectedLines) return {CompareStatus::Accepted};
+    std::size_t n = std::min(actualLines.size(), expectedLines.size());
+    std::size_t line = n;
+    for (std::size_t i = 0; i < n; i++) {
+        if (actualLines[i] != expectedLines[i]) {
+            line = i;
+            break;
+        }
+    }
+    if (line == n) {
+        if (actualLines.size() < expectedLines.size())
+            return {CompareStatus::WrongAnswer, WaDetail{line + 1, expectedLines[line], "<EOF>"}};
+        else
+            return {CompareStatus::WrongAnswer, WaDetail{line + 1, "<EOF>", actualLines[line]}};
+    } else
+        return {CompareStatus::WrongAnswer, WaDetail{line + 1, expectedLines[line], actualLines[line]}};
 }

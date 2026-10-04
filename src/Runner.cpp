@@ -89,7 +89,7 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
 
     auto terminateAndReap = [&]() -> bool {
         if (!killCgroup(cgroupPath)) {
-            if (kill(pid, SIGKILL) == -1) { // cgroup 整组终止失败，至少兜底终止直接子进程，best effort
+            if (kill(pid, SIGKILL) == -1) { // 双重保险，cgroup 整组终止失败，至少兜底终止直接子进程，best effort
                 std::perror("kill");
                 return false;
             }
@@ -137,6 +137,7 @@ RunResult run(const std::string &exePath, const std::string &inputPath, const st
             }
             break;
         }
+
         usleep(3000);
     }
 

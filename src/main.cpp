@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <optional> // optional
 
 #include <filesystem>
 #include <iomanip>  // setprecision
@@ -24,6 +25,8 @@ struct TestResult {
     std::string verdict;
     long long timeUs;
     long long memoryBytes;
+
+    std::optional<WaDetail> waDetail = std::nullopt;
 };
 
 TestResult judgeOneTest(const std::string &name, const fs::path &testDir, const fs::path &workDir, const fs::path &exePath, long long timeLimitMs, long long memoryLimitMiB) {
@@ -44,34 +47,36 @@ TestResult judgeOneTest(const std::string &name, const fs::path &testDir, const 
             return {name, "MLE", runResult.timeUs, runResult.memoryBytes};
 
         case RunStatus::InternalError:
-            return {name, "Run failed", runResult.timeUs, runResult.memoryBytes};
+            return {name, "Run Failed", runResult.timeUs, runResult.memoryBytes};
 
         case RunStatus::Ok:
             break;
     }
 
     CompareResult compareResult = compare(actualOutput.string(), expected.string());
-    switch (compareResult) {
-        case CompareResult::Accepted:
+    switch (compareResult.status) {
+        case CompareStatus::Accepted:
             return {name, "AC", runResult.timeUs, runResult.memoryBytes};
 
-        case CompareResult::WrongAnswer:
-            return {name, "WA", runResult.timeUs, runResult.memoryBytes};
+        case CompareStatus::WrongAnswer:
+            return {name, "WA", runResult.timeUs, runResult.memoryBytes, compareResult.waDetail};
 
-        case CompareResult::Error:
-            return {name, "Judge failed", runResult.timeUs, runResult.memoryBytes};
+        case CompareStatus::Error:
+            return {name, "Judge Failed", runResult.timeUs, runResult.memoryBytes};
     }
 
-    return {name, "Judge failed", runResult.timeUs, runResult.memoryBytes};
+    return {name, "Judge Failed", runResult.timeUs, runResult.memoryBytes};
 }
 
-const char *shortOptions = "t:m:h";
-static option longOptions[] = {{"time-limit", required_argument, nullptr, 't'}, {"memory-limit", required_argument, nullptr, 'm'}, {"help", no_argument, nullptr, 'h'}, {nullptr, 0, nullptr, 0}};
+const char *shortOptions = "t:m:j:h";
+
+static option longOptions[] = {{"time-limit", required_argument, nullptr, 't'}, {"memory-limit", required_argument, nullptr, 'm'}, {"jobs", required_argument, nullptr, 'j'}, {"help", no_argument, nullptr, 'h'}, {nullptr, 0, nullptr, 0}};
 
 int main(int argc, char *argv[]) {
     int opt;
     long long timeLimitMs = 1000;
     long long memoryLimitMiB = 64;
+    long long jobs = 0; // 0 表示自动使用 hardware_concurrency()
     while ((opt = getopt_long(argc, argv, shortOptions, longOptions, nullptr)) != -1) {
         switch (opt) {
             case 't': {
@@ -100,12 +105,27 @@ int main(int argc, char *argv[]) {
                 }
                 break;
             }
-            case 'h':
+            case 'j': {
+                std::string jobsText = optarg;
+                auto result = std::from_chars(jobsText.data(), jobsText.data() + jobsText.size(), jobs);
+                if (result.ec != std::errc{} || result.ptr != jobsText.data() + jobsText.size()) {
+                    std::cerr << "Invalid jobs\n";
+                    return 1;
+                }
+                if (jobs <= 0) {
+                    std::cerr << "Jobs must be positive\n";
+                    return 1;
+                }
+                break;
+            }
+            case 'h': {
                 std::cout << "Usage: " << argv[0] << " [options] <source_path>\n\nOptions:\n"
                           << "  -t, --time-limit <ms>     Set time limit in milliseconds (default: 1000 ms)\n"
                           << "  -m, --memory-limit <MiB>  Set memory limit in MiB (default: 64 MiB)\n"
+                          << "  -j, --jobs <N>            Set number of parallel workers (default: auto)\n"
                           << "  -h, --help                Show this help message\n";
                 return 0;
+            }
             default:
                 return 1;
         }
@@ -149,12 +169,19 @@ int main(int argc, char *argv[]) {
     std::vector<std::thread> workers;
     std::vector<TestResult> results(testNames.size());
 
-    std::size_t workerCount = std::thread::hardware_concurrency();
-    if (workerCount == 0) workerCount = 4;
+    std::size_t workerCount;
+    if (jobs > 0) {
+        workerCount = static_cast<std::size_t>(jobs);
+    } else {
+        workerCount = std::thread::hardware_concurrency();
+        if (workerCount == 0) workerCount = 4;
+    }
     workerCount = std::min(workerCount, testNames.size());
 
     // workerCount = 1; // 单线程
     // workerCount = testNames.size(); // 无界并发
+
+    auto judgeStart = std::chrono::steady_clock::now();
 
     for (std::size_t i = 0; i < workerCount; i++) {
         workers.emplace_back([&]() {
@@ -172,9 +199,19 @@ int main(int argc, char *argv[]) {
     }
 
     for (std::thread &worker : workers) worker.join();
-    for (const TestResult &result : results)
-        std::cout << std::fixed << std::setprecision(3) << "Test " << result.name << ": " << result.verdict << " (" << result.timeUs / 1000.0 << " ms, " << result.memoryBytes / 1024.0 / 1024.0
-                  << " MiB)\n";
+
+    auto judgeEnd = std::chrono::steady_clock::now();
+    double judgeMs = std::chrono::duration<double, std::milli>(judgeEnd - judgeStart).count();
+    std::cerr << "Judge elapsed: " << std::fixed << std::setprecision(3) << judgeMs << " ms\n";
+
+    for (const TestResult &result : results) {
+        std::cout << std::fixed << std::setprecision(3) << "Test " << result.name << ": " << result.verdict << " (" << result.timeUs / 1000.0 << " ms, " << result.memoryBytes / 1024.0 / 1024.0 << " MiB)\n";
+        if (result.waDetail) {
+            std::cout << "  First difference at line " << result.waDetail->line << '\n';
+            std::cout << "  Expect: " << result.waDetail->expected << '\n';
+            std::cout << "  Actual: " << result.waDetail->actual << '\n';
+        }
+    }
 
     std::error_code cleanupEc;
     fs::remove_all(workDir, cleanupEc);
